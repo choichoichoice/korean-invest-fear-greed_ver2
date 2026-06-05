@@ -13,8 +13,8 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "한국 주식 가격판",
-  description: "삼성전자, SK하이닉스, 현대차의 국내 주식 가격과 가격폭을 빠르게 확인하는 보드입니다.",
+  title: "한국 개미 심리 대시보드",
+  description: "한국 주식 가격 움직임과 FOMO, 공포, 탐욕, 빚투 위험을 함께 보는 심리 지수 보드입니다.",
   icons: {
     icon: "/favicon.svg",
     shortcut: "/favicon.svg",

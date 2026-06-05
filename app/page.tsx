@@ -1,5 +1,5 @@
-import StockBoard from "./stock-board";
+import MoodBoard from "./mood-board";
 
 export default function Home() {
-  return <StockBoard />;
+  return <MoodBoard />;
 }
