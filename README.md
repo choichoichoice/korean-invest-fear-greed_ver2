@@ -1,8 +1,6 @@
-# vinext-starter
+# Korea Invest Fear Greed
 
-A clean full-stack starter running on
-[vinext](https://github.com/cloudflare/vinext), with optional Cloudflare D1 and
-Drizzle support.
+한국 주식 가격 움직임과 FOMO, 공포, 탐욕, 빚투 위험을 함께 보는 심리 지수 대시보드입니다.
 
 ## Prerequisites
 
@@ -16,7 +14,16 @@ npm run dev
 npm run build
 ```
 
-This starter does not use `wrangler.jsonc`.
+## Environment Variables
+
+네이버 데이터랩 검색 트렌드를 실데이터로 연결하려면 `.env.local`에 다음 값을 넣습니다.
+
+```bash
+NAVER_DATALAB_CLIENT_ID=...
+NAVER_DATALAB_CLIENT_SECRET=...
+```
+
+두 값은 네이버 개발자센터에서 데이터랩 검색어트렌드 API를 사용하도록 등록한 애플리케이션의 Client ID와 Client Secret입니다. 저장소에는 실제 키를 커밋하지 않습니다.
 
 ## Included Shape
 

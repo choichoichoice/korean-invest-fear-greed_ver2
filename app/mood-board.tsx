@@ -29,6 +29,28 @@ type QuoteResponse = {
   error?: string;
 };
 
+type TrendSignal = {
+  id: string;
+  label: string;
+  value: string;
+  baseline: string;
+  score: number;
+  pulse: string;
+  sample: string;
+  source: "naver-datalab";
+};
+
+type TrendResponse = {
+  configured?: boolean;
+  fetchedAt?: string;
+  latencyMs?: number;
+  startDate?: string;
+  endDate?: string;
+  signals?: TrendSignal[];
+  message?: string;
+  error?: string;
+};
+
 type SignalTone = "hot" | "calm" | "fear" | "risk" | "neutral";
 
 type PsychologySignal = {
@@ -43,6 +65,7 @@ type PsychologySignal = {
 };
 
 const MODEL_REFRESH_MS = 15000;
+const SEARCH_REFRESH_MS = 60 * 60 * 1000;
 
 const dateFormatter = new Intl.DateTimeFormat("ko-KR", {
   timeZone: "Asia/Seoul",
@@ -106,7 +129,10 @@ const psychologySignals: PsychologySignal[] = [
   },
 ];
 
-const sourceRows = [
+function buildSourceRows(trendConfigured: boolean | null) {
+  const searchStatus = trendConfigured === true ? "연결됨" : trendConfigured === false ? "키 설정 필요" : "확인중";
+
+  return [
   {
     source: "가격",
     path: "현재: 네이버 금융 프록시",
@@ -115,9 +141,9 @@ const sourceRows = [
   },
   {
     source: "검색",
-    path: "후보: 네이버 데이터랩",
+    path: "현재: 네이버 데이터랩",
     role: "종목명 + 살까요/늦었나요/전망 검색 비율",
-    status: "키 발급 필요",
+    status: searchStatus,
   },
   {
     source: "커뮤니티",
@@ -131,7 +157,8 @@ const sourceRows = [
     role: "공포·탐욕 키워드 확산과 테마 집중도",
     status: "후순위",
   },
-];
+  ];
+}
 
 function clamp(value: number, min = 0, max = 100) {
   return Math.min(max, Math.max(min, value));
@@ -336,8 +363,79 @@ function QuoteStrip({ quotes }: { quotes: Quote[] }) {
   );
 }
 
+function SearchTrendPanel({
+  configured,
+  signals,
+  error,
+  fetchedAt,
+}: {
+  configured: boolean | null;
+  signals: TrendSignal[];
+  error: string | null;
+  fetchedAt: string | null;
+}) {
+  const statusText =
+    configured === true ? `실데이터 ${formatTimestamp(fetchedAt)}` : configured === false ? "키 2개 필요" : "확인중";
+
+  return (
+    <article className="min-w-0 rounded-lg border border-[#d9dee7] bg-white p-5 shadow-sm">
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <div>
+          <h2 className="text-lg font-semibold text-[#171a1f]">검색 트렌드</h2>
+          <p className="mt-1 text-sm text-[#687080]">
+            네이버 데이터랩으로 FOMO·공포·탐욕 키워드의 상대 검색량을 봅니다.
+          </p>
+        </div>
+        <span className="rounded-md border border-[#d9dee7] bg-[#f7f8fa] px-3 py-2 text-xs font-semibold text-[#4f5867]">
+          {statusText}
+        </span>
+      </div>
+
+      {error ? (
+        <div className="mt-4 rounded-lg border border-[#e0ae35] bg-[#fff8e6] px-4 py-3 text-sm text-[#6e4b00]">
+          {error}
+        </div>
+      ) : null}
+
+      {signals.length > 0 ? (
+        <div className="mt-5 grid gap-4">
+          {signals.map((signal) => (
+            <div
+              key={signal.id}
+              className="grid gap-3 border-t border-[#edf0f4] pt-4 first:border-t-0 first:pt-0 md:grid-cols-[minmax(0,1fr)_120px_90px] md:items-center"
+            >
+              <div className="min-w-0">
+                <div className="flex flex-wrap items-center gap-2">
+                  <p className="font-semibold text-[#171a1f]">{signal.label}</p>
+                  <span className="rounded-md bg-[#eef8f1] px-2 py-1 text-xs font-semibold text-[#246b45]">
+                    {signal.pulse}
+                  </span>
+                </div>
+                <p className="mt-1 text-sm text-[#687080]">{signal.sample}</p>
+              </div>
+              <div>
+                <p className="font-mono text-xl font-semibold text-[#20242b]">{signal.value}</p>
+                <p className="mt-1 text-xs text-[#687080]">{signal.baseline}</p>
+              </div>
+              <ScoreBar score={signal.score} tone="calm" />
+            </div>
+          ))}
+        </div>
+      ) : (
+        <div className="mt-4 rounded-lg border border-[#d9dee7] bg-[#f7f8fa] px-4 py-3 text-sm text-[#555f70]">
+          네이버 개발자센터의 Client ID와 Client Secret을 환경변수로 넣으면 이 영역이 실데이터로 바뀝니다.
+        </div>
+      )}
+    </article>
+  );
+}
+
 export default function MoodBoard() {
   const [quotes, setQuotes] = useState<Quote[]>([]);
+  const [trendSignals, setTrendSignals] = useState<TrendSignal[]>([]);
+  const [trendConfigured, setTrendConfigured] = useState<boolean | null>(null);
+  const [trendFetchedAt, setTrendFetchedAt] = useState<string | null>(null);
+  const [trendError, setTrendError] = useState<string | null>(null);
   const [fetchedAt, setFetchedAt] = useState<string | null>(null);
   const [latencyMs, setLatencyMs] = useState<number | null>(null);
   const [loading, setLoading] = useState(true);
@@ -363,13 +461,33 @@ export default function MoodBoard() {
     }
   }, []);
 
+  const loadTrends = useCallback(async () => {
+    try {
+      const response = await fetch(`/api/trends?ts=${Date.now()}`, { cache: "no-store" });
+      const payload = (await response.json()) as TrendResponse;
+
+      setTrendConfigured(payload.configured ?? false);
+      setTrendSignals(payload.signals ?? []);
+      setTrendFetchedAt(payload.fetchedAt ?? new Date().toISOString());
+
+      if (!response.ok || payload.error) {
+        throw new Error(payload.error ?? "검색 트렌드를 불러오지 못했습니다.");
+      }
+
+      setTrendError(payload.configured === false ? "Client ID와 Client Secret이 모두 필요합니다." : null);
+    } catch (fetchError) {
+      setTrendError(fetchError instanceof Error ? fetchError.message : "검색 트렌드를 불러오지 못했습니다.");
+    }
+  }, []);
+
   useEffect(() => {
     const initialLoad = window.setTimeout(() => {
       void loadQuotes();
+      void loadTrends();
     }, 0);
 
     return () => window.clearTimeout(initialLoad);
-  }, [loadQuotes]);
+  }, [loadQuotes, loadTrends]);
 
   useEffect(() => {
     const timer = window.setInterval(() => {
@@ -381,7 +499,18 @@ export default function MoodBoard() {
     return () => window.clearInterval(timer);
   }, [loadQuotes]);
 
+  useEffect(() => {
+    const timer = window.setInterval(() => {
+      if (document.visibilityState === "visible") {
+        void loadTrends();
+      }
+    }, SEARCH_REFRESH_MS);
+
+    return () => window.clearInterval(timer);
+  }, [loadTrends]);
+
   const model = useMemo(() => buildModel(quotes), [quotes]);
+  const dataSourceRows = useMemo(() => buildSourceRows(trendConfigured), [trendConfigured]);
   const label = indexLabel(model.composite);
 
   return (
@@ -504,6 +633,13 @@ export default function MoodBoard() {
               })}
             </div>
           </article>
+
+          <SearchTrendPanel
+            configured={trendConfigured}
+            signals={trendSignals}
+            error={trendError}
+            fetchedAt={trendFetchedAt}
+          />
         </div>
       </section>
 
@@ -562,7 +698,7 @@ export default function MoodBoard() {
                     </tr>
                   </thead>
                   <tbody>
-                    {sourceRows.map((row) => (
+                    {dataSourceRows.map((row) => (
                       <tr key={row.source} className="border-b border-[#edf0f4] last:border-b-0">
                         <td className="py-3 pr-4 font-semibold text-[#171a1f]">{row.source}</td>
                         <td className="px-4 py-3 text-[#20242b]">{row.path}</td>
