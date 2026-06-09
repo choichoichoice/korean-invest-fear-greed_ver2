@@ -88,6 +88,15 @@ type PsychologySignal = {
   tone: SignalTone;
 };
 
+type OntologyLayer = {
+  layer: string;
+  read: string;
+  actors: string;
+  signals: string[];
+  koreaLink: string;
+  tone: SignalTone;
+};
+
 const MODEL_REFRESH_MS = 15000;
 const SEARCH_REFRESH_MS = 60 * 60 * 1000;
 
@@ -153,9 +162,60 @@ const psychologySignals: PsychologySignal[] = [
   },
 ];
 
+const semiconductorOntology: OntologyLayer[] = [
+  {
+    layer: "AI 수요",
+    read: "GPU·가속기 수요가 HBM과 선단 패키징으로 번지는지",
+    actors: "NVIDIA · AMD · Broadcom · hyperscalers",
+    signals: ["AI capex", "GPU 대기기간", "서버 출하", "전력/데이터센터"],
+    koreaLink: "SK하이닉스 HBM, 삼성전자 HBM/메모리 기대",
+    tone: "hot",
+  },
+  {
+    layer: "메모리 사이클",
+    read: "DRAM/NAND 가격, 재고, 감산 종료가 동시에 좋아지는지",
+    actors: "Samsung · SK hynix · Micron",
+    signals: ["DRAM spot", "NAND spot", "재고일수", "계약가"],
+    koreaLink: "한국 대형 반도체 주가의 1차 엔진",
+    tone: "calm",
+  },
+  {
+    layer: "파운드리/패키징",
+    read: "선단 공정과 CoWoS/advanced packaging 병목이 어디서 풀리는지",
+    actors: "TSMC · Samsung Foundry · Intel",
+    signals: ["2nm/3nm", "수율", "CoWoS", "고객사 테이프아웃"],
+    koreaLink: "삼성전자 리레이팅 여부",
+    tone: "neutral",
+  },
+  {
+    layer: "장비/소재",
+    read: "EUV, 식각, 증착, 테스트 장비 발주가 살아나는지",
+    actors: "ASML · AMAT · Lam · TEL",
+    signals: ["장비 수주", "EUV 리드타임", "소재 수출", "CAPEX"],
+    koreaLink: "소부장과 코스닥 반도체 테마 확산",
+    tone: "risk",
+  },
+  {
+    layer: "최종 수요",
+    read: "AI 말고 PC·모바일·차량용이 같이 회복되는지",
+    actors: "Apple · Qualcomm · Tesla · automakers",
+    signals: ["스마트폰 출하", "PC 출하", "전장 재고", "산업재 PMI"],
+    koreaLink: "메모리 범용 수요와 현대차 전장 밸류체인",
+    tone: "neutral",
+  },
+  {
+    layer: "정책/지정학",
+    read: "수출규제, 보조금, 대만 리스크가 밸류에이션을 흔드는지",
+    actors: "US · China · Taiwan · Japan · EU",
+    signals: ["수출통제", "CHIPS Act", "중국 국산화", "환율"],
+    koreaLink: "외국인 수급, 원/달러, 한국 반도체 디스카운트",
+    tone: "fear",
+  },
+];
+
 function buildSourceRows(trendConfigured: boolean | null, googleConfigured: boolean | null) {
   const searchStatus = trendConfigured === true ? "연결됨" : trendConfigured === false ? "키 설정 필요" : "확인중";
-  const googleStatus = googleConfigured === true ? "연결됨" : googleConfigured === false ? "키 설정 필요" : "확인중";
+  const googleStatus = googleConfigured === true ? "연결됨" : googleConfigured === false ? "키 설정 필요" : "수동 OFF";
 
   return [
   {
@@ -167,13 +227,13 @@ function buildSourceRows(trendConfigured: boolean | null, googleConfigured: bool
   {
     source: "검색",
     path: "현재: 네이버 데이터랩",
-    role: "종목명 + 살까요/늦었나요/전망 검색 비율",
+    role: "FOMO·공포·탐욕·빚투·반도체 사이클 검색 비율",
     status: searchStatus,
   },
   {
     source: "웹 언급",
-    path: "현재: Google Custom Search",
-    role: "최근 7일 FOMO·공포·탐욕 키워드의 웹 검색 결과 수",
+    path: "보조: Google Custom Search",
+    role: "필요할 때만 수동 호출하는 최근 7일 웹 결과 수",
     status: googleStatus,
   },
   {
@@ -183,10 +243,10 @@ function buildSourceRows(trendConfigured: boolean | null, googleConfigured: bool
     status: "제휴 필요",
   },
   {
-    source: "뉴스",
-    path: "후보: BIG KINDS/뉴스 API",
-    role: "공포·탐욕 키워드 확산과 테마 집중도",
-    status: "후순위",
+    source: "온톨로지",
+    path: "현재: 비용 0원 룰셋",
+    role: "글로벌 반도체 참여자와 한국 종목 연결 지도",
+    status: "연결됨",
   },
   ];
 }
@@ -466,14 +526,18 @@ function GoogleMentionPanel({
   signals,
   error,
   fetchedAt,
+  loading,
+  onRefresh,
 }: {
   configured: boolean | null;
   signals: GoogleMentionSignal[];
   error: string | null;
   fetchedAt: string | null;
+  loading: boolean;
+  onRefresh: () => void;
 }) {
   const statusText =
-    configured === true ? `실데이터 ${formatTimestamp(fetchedAt)}` : configured === false ? "키 2개 필요" : "확인중";
+    configured === true ? `실데이터 ${formatTimestamp(fetchedAt)}` : configured === false ? "키 2개 필요" : "수동 OFF";
 
   return (
     <article className="min-w-0 rounded-lg border border-[#d9dee7] bg-white p-5 shadow-sm">
@@ -487,6 +551,13 @@ function GoogleMentionPanel({
         <span className="rounded-md border border-[#d9dee7] bg-[#f7f8fa] px-3 py-2 text-xs font-semibold text-[#4f5867]">
           {statusText}
         </span>
+        <button
+          type="button"
+          onClick={onRefresh}
+          className="rounded-md border border-[#b9c2cf] bg-white px-3 py-2 text-xs font-semibold text-[#20242b] transition hover:border-[#8793a6] hover:bg-[#f0f3f7]"
+        >
+          {loading ? "확인중" : "수동 확인"}
+        </button>
       </div>
 
       {error ? (
@@ -536,10 +607,59 @@ function GoogleMentionPanel({
         </div>
       ) : (
         <div className="mt-4 rounded-lg border border-[#d9dee7] bg-[#f7f8fa] px-4 py-3 text-sm text-[#555f70]">
-          Google API key와 Programmable Search Engine ID(cx)를 환경변수로 넣으면 이 영역이 실데이터로 바뀝니다.
+          비용 절감을 위해 자동 호출하지 않습니다. Google API key와 Search Engine ID(cx)를 넣은 뒤 필요할 때만 수동 확인합니다.
         </div>
       )}
     </article>
+  );
+}
+
+function SemiconductorOntologyPanel() {
+  return (
+    <section className="mx-auto w-full max-w-7xl px-4 pb-6 sm:px-6">
+      <article className="rounded-lg border border-[#d9dee7] bg-white p-5 shadow-sm">
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <div>
+            <h2 className="text-lg font-semibold text-[#171a1f]">글로벌 반도체 온톨로지</h2>
+            <p className="mt-1 text-sm text-[#687080]">
+              전세계 시장참여자를 비용 없이 구조화해서 한국 반도체 심리 신호와 연결합니다.
+            </p>
+          </div>
+          <span className="rounded-md border border-[#bfe8ca] bg-[#eef8f1] px-3 py-2 text-xs font-semibold text-[#246b45]">
+            비용 0원
+          </span>
+        </div>
+
+        <div className="mt-5 grid gap-3 lg:grid-cols-3">
+          {semiconductorOntology.map((item) => {
+            const colors = toneClasses(item.tone);
+
+            return (
+              <article key={item.layer} className={`rounded-lg border ${colors.border} ${colors.bg} p-4`}>
+                <div className="flex items-start justify-between gap-3">
+                  <div>
+                    <h3 className={`text-base font-semibold ${colors.text}`}>{item.layer}</h3>
+                    <p className="mt-2 text-sm leading-6 text-[#20242b]">{item.read}</p>
+                  </div>
+                </div>
+                <p className="mt-3 text-xs font-semibold text-[#687080]">{item.actors}</p>
+                <div className="mt-3 flex flex-wrap gap-1.5">
+                  {item.signals.map((signal) => (
+                    <span
+                      key={`${item.layer}-${signal}`}
+                      className="rounded-md border border-[#d9dee7] bg-white px-2 py-1 text-xs font-medium text-[#4f5867]"
+                    >
+                      {signal}
+                    </span>
+                  ))}
+                </div>
+                <p className="mt-4 border-t border-black/10 pt-3 text-sm text-[#4f5867]">{item.koreaLink}</p>
+              </article>
+            );
+          })}
+        </div>
+      </article>
+    </section>
   );
 }
 
@@ -553,6 +673,7 @@ export default function MoodBoard() {
   const [googleConfigured, setGoogleConfigured] = useState<boolean | null>(null);
   const [googleFetchedAt, setGoogleFetchedAt] = useState<string | null>(null);
   const [googleError, setGoogleError] = useState<string | null>(null);
+  const [googleLoading, setGoogleLoading] = useState(false);
   const [fetchedAt, setFetchedAt] = useState<string | null>(null);
   const [latencyMs, setLatencyMs] = useState<number | null>(null);
   const [loading, setLoading] = useState(true);
@@ -598,6 +719,7 @@ export default function MoodBoard() {
   }, []);
 
   const loadGoogleSearch = useCallback(async () => {
+    setGoogleLoading(true);
     try {
       const response = await fetch(`/api/google-search?ts=${Date.now()}`, { cache: "no-store" });
       const payload = (await response.json()) as GoogleSearchResponse;
@@ -613,6 +735,8 @@ export default function MoodBoard() {
       setGoogleError(payload.configured === false ? "Google API key와 Search Engine ID(cx)가 모두 필요합니다." : null);
     } catch (fetchError) {
       setGoogleError(fetchError instanceof Error ? fetchError.message : "Google 웹 언급을 불러오지 못했습니다.");
+    } finally {
+      setGoogleLoading(false);
     }
   }, []);
 
@@ -620,11 +744,10 @@ export default function MoodBoard() {
     const initialLoad = window.setTimeout(() => {
       void loadQuotes();
       void loadTrends();
-      void loadGoogleSearch();
     }, 0);
 
     return () => window.clearTimeout(initialLoad);
-  }, [loadGoogleSearch, loadQuotes, loadTrends]);
+  }, [loadQuotes, loadTrends]);
 
   useEffect(() => {
     const timer = window.setInterval(() => {
@@ -645,16 +768,6 @@ export default function MoodBoard() {
 
     return () => window.clearInterval(timer);
   }, [loadTrends]);
-
-  useEffect(() => {
-    const timer = window.setInterval(() => {
-      if (document.visibilityState === "visible") {
-        void loadGoogleSearch();
-      }
-    }, SEARCH_REFRESH_MS);
-
-    return () => window.clearInterval(timer);
-  }, [loadGoogleSearch]);
 
   const model = useMemo(() => buildModel(quotes), [quotes]);
   const dataSourceRows = useMemo(() => buildSourceRows(trendConfigured, googleConfigured), [googleConfigured, trendConfigured]);
@@ -793,9 +906,13 @@ export default function MoodBoard() {
             signals={googleSignals}
             error={googleError}
             fetchedAt={googleFetchedAt}
+            loading={googleLoading}
+            onRefresh={() => void loadGoogleSearch()}
           />
         </div>
       </section>
+
+      <SemiconductorOntologyPanel />
 
       <section className="mx-auto w-full max-w-7xl px-4 pb-6 sm:px-6">
         <div className="mb-3 flex flex-wrap items-center justify-between gap-3">

@@ -40,8 +40,19 @@ const KEYWORD_GROUPS = [
     keywords: ["신용융자", "미수거래", "주식 대출", "몰빵", "반대매매"],
   },
   {
-    groupName: "관심종목",
-    keywords: ["삼성전자", "SK하이닉스", "현대차"],
+    groupName: "반도체",
+    keywords: [
+      "HBM",
+      "DRAM",
+      "낸드",
+      "파운드리",
+      "반도체 장비",
+      "엔비디아",
+      "TSMC",
+      "ASML",
+      "삼성전자",
+      "SK하이닉스",
+    ],
   },
 ];
 

@@ -1,6 +1,7 @@
 # Korea Invest Fear Greed
 
 한국 주식 가격 움직임과 FOMO, 공포, 탐욕, 빚투 위험을 함께 보는 심리 지수 대시보드입니다.
+개인용 시장 레이더에 맞춰 글로벌 반도체 온톨로지도 함께 봅니다.
 
 ## Prerequisites
 
@@ -33,6 +34,17 @@ GOOGLE_SEARCH_CX=...
 ```
 
 `GOOGLE_SEARCH_CX`는 Google Programmable Search Engine의 Search Engine ID입니다.
+
+## Semiconductor Ontology
+
+반도체 시장은 한국 종목만으로 읽지 않고 다음 글로벌 레이어로 나눠 봅니다.
+
+- AI 수요: GPU, hyperscaler capex, HBM 수요
+- 메모리 사이클: DRAM/NAND 가격, 재고, 감산
+- 파운드리/패키징: 선단 공정, CoWoS, 수율
+- 장비/소재: EUV, 식각, 증착, 테스트 장비
+- 최종 수요: PC, 모바일, 차량용, 산업재
+- 정책/지정학: 수출규제, 보조금, 대만 리스크, 환율
 
 ## Included Shape
 
