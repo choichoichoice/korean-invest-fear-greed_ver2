@@ -51,6 +51,30 @@ type TrendResponse = {
   error?: string;
 };
 
+type GoogleMentionSignal = {
+  id: string;
+  label: string;
+  value: string;
+  baseline: string;
+  score: number;
+  pulse: string;
+  sample: string;
+  topLinks: {
+    title: string;
+    displayLink: string;
+    link: string;
+  }[];
+};
+
+type GoogleSearchResponse = {
+  configured?: boolean;
+  fetchedAt?: string;
+  latencyMs?: number;
+  signals?: GoogleMentionSignal[];
+  message?: string;
+  error?: string;
+};
+
 type SignalTone = "hot" | "calm" | "fear" | "risk" | "neutral";
 
 type PsychologySignal = {
@@ -129,8 +153,9 @@ const psychologySignals: PsychologySignal[] = [
   },
 ];
 
-function buildSourceRows(trendConfigured: boolean | null) {
+function buildSourceRows(trendConfigured: boolean | null, googleConfigured: boolean | null) {
   const searchStatus = trendConfigured === true ? "연결됨" : trendConfigured === false ? "키 설정 필요" : "확인중";
+  const googleStatus = googleConfigured === true ? "연결됨" : googleConfigured === false ? "키 설정 필요" : "확인중";
 
   return [
   {
@@ -144,6 +169,12 @@ function buildSourceRows(trendConfigured: boolean | null) {
     path: "현재: 네이버 데이터랩",
     role: "종목명 + 살까요/늦었나요/전망 검색 비율",
     status: searchStatus,
+  },
+  {
+    source: "웹 언급",
+    path: "현재: Google Custom Search",
+    role: "최근 7일 FOMO·공포·탐욕 키워드의 웹 검색 결과 수",
+    status: googleStatus,
   },
   {
     source: "커뮤니티",
@@ -430,12 +461,98 @@ function SearchTrendPanel({
   );
 }
 
+function GoogleMentionPanel({
+  configured,
+  signals,
+  error,
+  fetchedAt,
+}: {
+  configured: boolean | null;
+  signals: GoogleMentionSignal[];
+  error: string | null;
+  fetchedAt: string | null;
+}) {
+  const statusText =
+    configured === true ? `실데이터 ${formatTimestamp(fetchedAt)}` : configured === false ? "키 2개 필요" : "확인중";
+
+  return (
+    <article className="min-w-0 rounded-lg border border-[#d9dee7] bg-white p-5 shadow-sm">
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <div>
+          <h2 className="text-lg font-semibold text-[#171a1f]">Google 웹 언급</h2>
+          <p className="mt-1 text-sm text-[#687080]">
+            Google Custom Search로 최근 7일 웹 결과 수와 상위 링크를 봅니다.
+          </p>
+        </div>
+        <span className="rounded-md border border-[#d9dee7] bg-[#f7f8fa] px-3 py-2 text-xs font-semibold text-[#4f5867]">
+          {statusText}
+        </span>
+      </div>
+
+      {error ? (
+        <div className="mt-4 rounded-lg border border-[#e0ae35] bg-[#fff8e6] px-4 py-3 text-sm text-[#6e4b00]">
+          {error}
+        </div>
+      ) : null}
+
+      {signals.length > 0 ? (
+        <div className="mt-5 grid gap-4">
+          {signals.map((signal) => (
+            <div
+              key={signal.id}
+              className="grid gap-3 border-t border-[#edf0f4] pt-4 first:border-t-0 first:pt-0 md:grid-cols-[minmax(0,1fr)_110px_90px] md:items-start"
+            >
+              <div className="min-w-0">
+                <div className="flex flex-wrap items-center gap-2">
+                  <p className="font-semibold text-[#171a1f]">{signal.label}</p>
+                  <span className="rounded-md bg-[#f4f6f8] px-2 py-1 text-xs font-semibold text-[#4f5867]">
+                    {signal.pulse}
+                  </span>
+                </div>
+                <p className="mt-1 text-sm text-[#687080]">{signal.sample}</p>
+                {signal.topLinks.length > 0 ? (
+                  <div className="mt-2 grid gap-1">
+                    {signal.topLinks.slice(0, 2).map((link) => (
+                      <a
+                        key={`${signal.id}-${link.link}`}
+                        href={link.link}
+                        target="_blank"
+                        rel="noreferrer"
+                        className="truncate text-xs font-medium text-[#1f64d8] hover:underline"
+                      >
+                        {link.title}
+                      </a>
+                    ))}
+                  </div>
+                ) : null}
+              </div>
+              <div>
+                <p className="font-mono text-xl font-semibold text-[#20242b]">{signal.value}</p>
+                <p className="mt-1 text-xs text-[#687080]">{signal.baseline}</p>
+              </div>
+              <ScoreBar score={signal.score} tone="neutral" />
+            </div>
+          ))}
+        </div>
+      ) : (
+        <div className="mt-4 rounded-lg border border-[#d9dee7] bg-[#f7f8fa] px-4 py-3 text-sm text-[#555f70]">
+          Google API key와 Programmable Search Engine ID(cx)를 환경변수로 넣으면 이 영역이 실데이터로 바뀝니다.
+        </div>
+      )}
+    </article>
+  );
+}
+
 export default function MoodBoard() {
   const [quotes, setQuotes] = useState<Quote[]>([]);
   const [trendSignals, setTrendSignals] = useState<TrendSignal[]>([]);
   const [trendConfigured, setTrendConfigured] = useState<boolean | null>(null);
   const [trendFetchedAt, setTrendFetchedAt] = useState<string | null>(null);
   const [trendError, setTrendError] = useState<string | null>(null);
+  const [googleSignals, setGoogleSignals] = useState<GoogleMentionSignal[]>([]);
+  const [googleConfigured, setGoogleConfigured] = useState<boolean | null>(null);
+  const [googleFetchedAt, setGoogleFetchedAt] = useState<string | null>(null);
+  const [googleError, setGoogleError] = useState<string | null>(null);
   const [fetchedAt, setFetchedAt] = useState<string | null>(null);
   const [latencyMs, setLatencyMs] = useState<number | null>(null);
   const [loading, setLoading] = useState(true);
@@ -480,14 +597,34 @@ export default function MoodBoard() {
     }
   }, []);
 
+  const loadGoogleSearch = useCallback(async () => {
+    try {
+      const response = await fetch(`/api/google-search?ts=${Date.now()}`, { cache: "no-store" });
+      const payload = (await response.json()) as GoogleSearchResponse;
+
+      setGoogleConfigured(payload.configured ?? false);
+      setGoogleSignals(payload.signals ?? []);
+      setGoogleFetchedAt(payload.fetchedAt ?? new Date().toISOString());
+
+      if (!response.ok || payload.error) {
+        throw new Error(payload.error ?? "Google 웹 언급을 불러오지 못했습니다.");
+      }
+
+      setGoogleError(payload.configured === false ? "Google API key와 Search Engine ID(cx)가 모두 필요합니다." : null);
+    } catch (fetchError) {
+      setGoogleError(fetchError instanceof Error ? fetchError.message : "Google 웹 언급을 불러오지 못했습니다.");
+    }
+  }, []);
+
   useEffect(() => {
     const initialLoad = window.setTimeout(() => {
       void loadQuotes();
       void loadTrends();
+      void loadGoogleSearch();
     }, 0);
 
     return () => window.clearTimeout(initialLoad);
-  }, [loadQuotes, loadTrends]);
+  }, [loadGoogleSearch, loadQuotes, loadTrends]);
 
   useEffect(() => {
     const timer = window.setInterval(() => {
@@ -509,8 +646,18 @@ export default function MoodBoard() {
     return () => window.clearInterval(timer);
   }, [loadTrends]);
 
+  useEffect(() => {
+    const timer = window.setInterval(() => {
+      if (document.visibilityState === "visible") {
+        void loadGoogleSearch();
+      }
+    }, SEARCH_REFRESH_MS);
+
+    return () => window.clearInterval(timer);
+  }, [loadGoogleSearch]);
+
   const model = useMemo(() => buildModel(quotes), [quotes]);
-  const dataSourceRows = useMemo(() => buildSourceRows(trendConfigured), [trendConfigured]);
+  const dataSourceRows = useMemo(() => buildSourceRows(trendConfigured, googleConfigured), [googleConfigured, trendConfigured]);
   const label = indexLabel(model.composite);
 
   return (
@@ -639,6 +786,13 @@ export default function MoodBoard() {
             signals={trendSignals}
             error={trendError}
             fetchedAt={trendFetchedAt}
+          />
+
+          <GoogleMentionPanel
+            configured={googleConfigured}
+            signals={googleSignals}
+            error={googleError}
+            fetchedAt={googleFetchedAt}
           />
         </div>
       </section>

@@ -25,6 +25,15 @@ NAVER_DATALAB_CLIENT_SECRET=...
 
 두 값은 네이버 개발자센터에서 데이터랩 검색어트렌드 API를 사용하도록 등록한 애플리케이션의 Client ID와 Client Secret입니다. 저장소에는 실제 키를 커밋하지 않습니다.
 
+Google 웹 언급량 프록시를 연결하려면 Google Custom Search JSON API용 값도 추가합니다.
+
+```bash
+GOOGLE_SEARCH_API_KEY=...
+GOOGLE_SEARCH_CX=...
+```
+
+`GOOGLE_SEARCH_CX`는 Google Programmable Search Engine의 Search Engine ID입니다.
+
 ## Included Shape
 
 - edit site code under `app/`
