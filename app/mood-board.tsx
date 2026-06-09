@@ -97,8 +97,20 @@ type OntologyLayer = {
   tone: SignalTone;
 };
 
+type ScorePoint = {
+  t: number;
+  score: number;
+  marketHeat: number;
+  fomo: number;
+  fear: number;
+};
+
 const MODEL_REFRESH_MS = 15000;
 const SEARCH_REFRESH_MS = 60 * 60 * 1000;
+const SCORE_HISTORY_KEY = "kfg:score-history:v1";
+const SCORE_HISTORY_WINDOW_MS = 48 * 60 * 60 * 1000;
+const SCORE_HISTORY_MIN_GAP_MS = 10 * 60 * 1000;
+const SCORE_HISTORY_MAX_POINTS = 288;
 
 const dateFormatter = new Intl.DateTimeFormat("ko-KR", {
   timeZone: "Asia/Seoul",
@@ -272,6 +284,66 @@ function formatSignedRate(value: number) {
   return `${sign}${value.toFixed(2)}%`;
 }
 
+function formatCompactTime(value: number) {
+  return new Intl.DateTimeFormat("ko-KR", {
+    timeZone: "Asia/Seoul",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+  }).format(new Date(value));
+}
+
+function readScoreHistory() {
+  if (typeof window === "undefined") return [];
+
+  try {
+    const raw = window.localStorage.getItem(SCORE_HISTORY_KEY);
+    if (!raw) return [];
+    const parsed = JSON.parse(raw) as ScorePoint[];
+    const cutoff = Date.now() - SCORE_HISTORY_WINDOW_MS;
+
+    return parsed
+      .filter(
+        (point) =>
+          Number.isFinite(point.t) &&
+          Number.isFinite(point.score) &&
+          point.t >= cutoff &&
+          point.score >= 0 &&
+          point.score <= 100,
+      )
+      .slice(-SCORE_HISTORY_MAX_POINTS);
+  } catch {
+    return [];
+  }
+}
+
+function saveScoreHistory(points: ScorePoint[]) {
+  if (typeof window === "undefined") return;
+
+  try {
+    window.localStorage.setItem(SCORE_HISTORY_KEY, JSON.stringify(points.slice(-SCORE_HISTORY_MAX_POINTS)));
+  } catch {
+    // Local storage can be unavailable in private or restricted browser contexts.
+  }
+}
+
+function appendScorePoint(points: ScorePoint[], nextPoint: ScorePoint) {
+  const cutoff = nextPoint.t - SCORE_HISTORY_WINDOW_MS;
+  const trimmed = points.filter((point) => point.t >= cutoff);
+  const previous = trimmed.at(-1);
+
+  if (
+    previous &&
+    nextPoint.t - previous.t < SCORE_HISTORY_MIN_GAP_MS &&
+    Math.abs(nextPoint.score - previous.score) < 2
+  ) {
+    return trimmed;
+  }
+
+  return [...trimmed, nextPoint].slice(-SCORE_HISTORY_MAX_POINTS);
+}
+
 function toneClasses(tone: SignalTone) {
   const map: Record<SignalTone, { text: string; bg: string; border: string; fill: string }> = {
     hot: {
@@ -386,6 +458,101 @@ function MoodScale({ score }: { score: number }) {
         <span className="text-right">FOMO</span>
       </div>
     </div>
+  );
+}
+
+function ScoreHistoryChart({ points, currentPoint }: { points: ScorePoint[]; currentPoint: ScorePoint }) {
+  const width = 520;
+  const height = 156;
+  const paddingX = 18;
+  const paddingY = 16;
+  const plotWidth = width - paddingX * 2;
+  const plotHeight = height - paddingY * 2;
+  const hasHistory = points.length > 0;
+  const fallbackPoint: ScorePoint = {
+    ...currentPoint,
+    t: currentPoint.t > 0 ? currentPoint.t : 0,
+  };
+  const chartPoints = hasHistory ? points : [fallbackPoint];
+  const minTime = chartPoints.length > 1 ? chartPoints[0].t : 0;
+  const maxTime = chartPoints.length > 1 ? chartPoints.at(-1)!.t : 1;
+  const timeSpan = Math.max(1, maxTime - minTime);
+
+  const coordinates = chartPoints.map((point) => {
+    const x = paddingX + ((point.t - minTime) / timeSpan) * plotWidth;
+    const y = paddingY + (1 - clamp(point.score) / 100) * plotHeight;
+
+    return { x, y, point };
+  });
+  const path =
+    coordinates.length > 1
+      ? coordinates.map((coordinate, index) => `${index === 0 ? "M" : "L"} ${coordinate.x} ${coordinate.y}`).join(" ")
+      : "";
+  const areaPath =
+    coordinates.length > 1
+      ? `${path} L ${coordinates.at(-1)!.x} ${height - paddingY} L ${coordinates[0].x} ${height - paddingY} Z`
+      : "";
+  const latest = hasHistory ? chartPoints.at(-1) ?? fallbackPoint : currentPoint;
+  const first = chartPoints[0] ?? fallbackPoint;
+  const delta = latest.score - first.score;
+  const deltaText = `${delta > 0 ? "+" : ""}${delta}`;
+  const deltaClass = delta > 0 ? "text-[#b4232c]" : delta < 0 ? "text-[#1d4ed8]" : "text-[#4f5867]";
+
+  return (
+    <section className="mt-6 rounded-lg border border-[#d9dee7] bg-[#fbfcfd] p-4">
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <div>
+          <h2 className="text-sm font-semibold text-[#171a1f]">종합점수 시계열</h2>
+          <p className="mt-1 text-xs text-[#687080]">최근 48시간 · 브라우저 저장</p>
+        </div>
+        <div className="w-full text-left sm:w-auto sm:text-right">
+          <p className={`font-mono text-2xl font-semibold ${deltaClass}`}>{deltaText}</p>
+          <p className="text-xs text-[#687080]">{hasHistory ? `${chartPoints.length}개 스냅샷` : "스냅샷 대기"}</p>
+        </div>
+      </div>
+
+      <div className="mt-4 h-[156px] w-full overflow-hidden rounded-md bg-white">
+        <svg viewBox={`0 0 ${width} ${height}`} role="img" aria-label="종합점수 시계열 그래프" className="h-full w-full">
+          <defs>
+            <linearGradient id="scoreLineGradient" x1="0" x2="1" y1="0" y2="0">
+              <stop offset="0%" stopColor="#2563eb" />
+              <stop offset="50%" stopColor="#16a34a" />
+              <stop offset="100%" stopColor="#e11d48" />
+            </linearGradient>
+            <linearGradient id="scoreAreaGradient" x1="0" x2="0" y1="0" y2="1">
+              <stop offset="0%" stopColor="#16a34a" stopOpacity="0.22" />
+              <stop offset="100%" stopColor="#16a34a" stopOpacity="0.02" />
+            </linearGradient>
+          </defs>
+          {[25, 50, 75].map((level) => {
+            const y = paddingY + (1 - level / 100) * plotHeight;
+            return (
+              <g key={level}>
+                <line x1={paddingX} x2={width - paddingX} y1={y} y2={y} stroke="#e5e9ef" strokeWidth="1" />
+                <text x={paddingX} y={y - 4} fill="#8793a6" fontSize="10">
+                  {level}
+                </text>
+              </g>
+            );
+          })}
+          {areaPath ? <path d={areaPath} fill="url(#scoreAreaGradient)" /> : null}
+          {path ? (
+            <path d={path} fill="none" stroke="url(#scoreLineGradient)" strokeLinecap="round" strokeLinejoin="round" strokeWidth="4" />
+          ) : (
+            <circle cx={coordinates[0].x} cy={coordinates[0].y} r="5" fill="#16a34a" />
+          )}
+          {coordinates.slice(-18).map((coordinate) => (
+            <circle key={`${coordinate.point.t}-${coordinate.point.score}`} cx={coordinate.x} cy={coordinate.y} r="3.5" fill="#111317" opacity="0.72" />
+          ))}
+        </svg>
+      </div>
+
+      <div className="mt-3 flex flex-wrap items-center justify-between gap-2 text-xs text-[#687080]">
+        <span>{hasHistory ? formatCompactTime(first.t) : "-"}</span>
+        <span>현재 {latest.score}</span>
+        <span>{hasHistory ? formatCompactTime(latest.t) : "-"}</span>
+      </div>
+    </section>
   );
 }
 
@@ -678,6 +845,7 @@ export default function MoodBoard() {
   const [latencyMs, setLatencyMs] = useState<number | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [scoreHistory, setScoreHistory] = useState<ScorePoint[]>([]);
 
   const loadQuotes = useCallback(async () => {
     try {
@@ -744,6 +912,7 @@ export default function MoodBoard() {
     const initialLoad = window.setTimeout(() => {
       void loadQuotes();
       void loadTrends();
+      setScoreHistory(readScoreHistory());
     }, 0);
 
     return () => window.clearTimeout(initialLoad);
@@ -771,7 +940,43 @@ export default function MoodBoard() {
 
   const model = useMemo(() => buildModel(quotes), [quotes]);
   const dataSourceRows = useMemo(() => buildSourceRows(trendConfigured, googleConfigured), [googleConfigured, trendConfigured]);
+  const currentScorePoint = useMemo<ScorePoint>(
+    () => ({
+      t: fetchedAt ? new Date(fetchedAt).getTime() : 0,
+      score: model.composite,
+      marketHeat: model.marketHeat,
+      fomo: model.fomo,
+      fear: model.fear,
+    }),
+    [fetchedAt, model.composite, model.fear, model.fomo, model.marketHeat],
+  );
   const label = indexLabel(model.composite);
+
+  useEffect(() => {
+    const timer = window.setTimeout(() => {
+      if (quotes.length === 0) return;
+
+      const nextPoint: ScorePoint = {
+        t: fetchedAt ? new Date(fetchedAt).getTime() : Date.now(),
+        score: model.composite,
+        marketHeat: model.marketHeat,
+        fomo: model.fomo,
+        fear: model.fear,
+      };
+
+      if (!Number.isFinite(nextPoint.t)) {
+        nextPoint.t = Date.now();
+      }
+
+      setScoreHistory((current) => {
+        const next = appendScorePoint(current.length > 0 ? current : readScoreHistory(), nextPoint);
+        saveScoreHistory(next);
+        return next;
+      });
+    }, 0);
+
+    return () => window.clearTimeout(timer);
+  }, [fetchedAt, model.composite, model.fear, model.fomo, model.marketHeat, quotes.length]);
 
   return (
     <main className="min-h-screen overflow-x-hidden bg-[#f7f8fa] text-[#171a1f]">
@@ -818,6 +1023,7 @@ export default function MoodBoard() {
           <div className="mt-6">
             <MoodScale score={model.composite} />
           </div>
+          <ScoreHistoryChart points={scoreHistory} currentPoint={currentScorePoint} />
           <div className="mt-6 grid gap-3 sm:grid-cols-2">
             <MetricTile
               label="FOMO 가속도"
