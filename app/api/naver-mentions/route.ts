@@ -95,6 +95,19 @@ function scoreFromMentions(total: number) {
   return Math.round(clamp(Math.log10(total + 1) * 22));
 }
 
+function isSearchAuthorizationError(error: unknown) {
+  const message = error instanceof Error ? error.message : String(error);
+  return /Scope Status Invalid|Authentication failed|인증에 실패/i.test(message);
+}
+
+function searchApiSetupMessage() {
+  return [
+    "네이버 검색 API 권한이 필요합니다.",
+    "네이버 개발자센터의 애플리케이션 API 설정에서 검색 API를 추가하거나,",
+    "검색 API가 켜진 별도 앱의 NAVER_SEARCH_CLIENT_ID와 NAVER_SEARCH_CLIENT_SECRET을 Sites 환경변수에 넣어주세요.",
+  ].join(" ");
+}
+
 async function fetchSearch(
   source: MentionSource,
   query: string,
@@ -171,8 +184,8 @@ async function buildSignal(config: MentionQuery, clientId: string, clientSecret:
 
 export async function GET() {
   const startedAt = Date.now();
-  const clientId = process.env.NAVER_DATALAB_CLIENT_ID;
-  const clientSecret = process.env.NAVER_DATALAB_CLIENT_SECRET;
+  const clientId = process.env.NAVER_SEARCH_CLIENT_ID ?? process.env.NAVER_DATALAB_CLIENT_ID;
+  const clientSecret = process.env.NAVER_SEARCH_CLIENT_SECRET ?? process.env.NAVER_DATALAB_CLIENT_SECRET;
 
   if (!clientId || !clientSecret) {
     return Response.json(
@@ -184,7 +197,8 @@ export async function GET() {
         dailyCallBudget: 25000,
         estimatedCallsPerRefresh: 36,
         signals: [],
-        message: "NAVER_DATALAB_CLIENT_ID and NAVER_DATALAB_CLIENT_SECRET are required.",
+        message:
+          "NAVER_SEARCH_CLIENT_ID/NAVER_SEARCH_CLIENT_SECRET or NAVER_DATALAB_CLIENT_ID/NAVER_DATALAB_CLIENT_SECRET are required.",
       },
       {
         headers: {
@@ -216,6 +230,8 @@ export async function GET() {
       },
     );
   } catch (error) {
+    const authorizationError = isSearchAuthorizationError(error);
+
     return Response.json(
       {
         configured: true,
@@ -225,10 +241,14 @@ export async function GET() {
         dailyCallBudget: 25000,
         estimatedCallsPerRefresh: 36,
         signals: [],
-        error: error instanceof Error ? error.message : "Unknown Naver Search fetch error",
+        error: authorizationError
+          ? searchApiSetupMessage()
+          : error instanceof Error
+            ? error.message
+            : "Unknown Naver Search fetch error",
       },
       {
-        status: 502,
+        status: authorizationError ? 200 : 502,
         headers: {
           "Cache-Control": "no-store, max-age=0",
         },
