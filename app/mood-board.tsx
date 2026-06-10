@@ -312,6 +312,7 @@ function readScoreHistory() {
           point.score >= 0 &&
           point.score <= 100,
       )
+      .sort((left, right) => left.t - right.t)
       .slice(-SCORE_HISTORY_MAX_POINTS);
   } catch {
     return [];
@@ -330,7 +331,7 @@ function saveScoreHistory(points: ScorePoint[]) {
 
 function appendScorePoint(points: ScorePoint[], nextPoint: ScorePoint) {
   const cutoff = nextPoint.t - SCORE_HISTORY_WINDOW_MS;
-  const trimmed = points.filter((point) => point.t >= cutoff);
+  const trimmed = points.filter((point) => point.t >= cutoff).sort((left, right) => left.t - right.t);
   const previous = trimmed.at(-1);
 
   if (
@@ -394,6 +395,46 @@ function indexTone(score: number) {
   if (score >= 60) return "text-[#b7791f]";
   if (score >= 45) return "text-[#246b45]";
   return "text-[#1d4ed8]";
+}
+
+function decisionCopy(score: number) {
+  if (score >= 78) {
+    return {
+      title: "과열 경계",
+      body: "추격 매수보다 관찰 우선. FOMO가 더 빨라지는지 확인합니다.",
+      tone: "hot" as SignalTone,
+    };
+  }
+
+  if (score >= 60) {
+    return {
+      title: "탐욕 우세",
+      body: "가격은 강하지만 심리도 달아오른 구간입니다.",
+      tone: "risk" as SignalTone,
+    };
+  }
+
+  if (score >= 45) {
+    return {
+      title: "중립 관찰",
+      body: "방향보다 가격폭과 검색 가속도를 같이 봅니다.",
+      tone: "calm" as SignalTone,
+    };
+  }
+
+  if (score >= 25) {
+    return {
+      title: "공포 우세",
+      body: "매도 압력이 강한 구간. 반등보다 리스크 확인이 먼저입니다.",
+      tone: "fear" as SignalTone,
+    };
+  }
+
+  return {
+    title: "극단 공포",
+    body: "심리가 크게 식은 구간. 가격 안정 여부를 먼저 확인합니다.",
+    tone: "fear" as SignalTone,
+  };
 }
 
 function buildModel(quotes: Quote[]) {
@@ -688,6 +729,45 @@ function SearchTrendPanel({
   );
 }
 
+function PsychologyPulsePanel() {
+  return (
+    <article className="min-w-0 rounded-lg border border-[#d9dee7] bg-white p-5 shadow-sm">
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <div>
+          <h2 className="text-lg font-semibold text-[#171a1f]">FOMO 인간지표</h2>
+          <p className="mt-1 text-sm text-[#687080]">질문 증가율과 초보자 언어만 압축해서 봅니다.</p>
+        </div>
+        <span className="rounded-md border border-[#fde68a] bg-[#fffbeb] px-3 py-2 text-xs font-semibold text-[#8a5208]">
+          후보 모델
+        </span>
+      </div>
+
+      <div className="mt-5 grid gap-4 md:grid-cols-3">
+        {psychologySignals.slice(0, 3).map((signal) => {
+          const colors = toneClasses(signal.tone);
+
+          return (
+            <div
+              key={signal.id}
+              className="border-t border-[#edf0f4] pt-4 first:border-t-0 first:pt-0 md:border-l md:border-t-0 md:pl-4 md:pt-0 md:first:border-l-0 md:first:pl-0"
+            >
+              <div className="flex items-start justify-between gap-2">
+                <p className="font-semibold text-[#171a1f]">{signal.label}</p>
+                <span className={`${colors.bg} ${colors.text} rounded-md px-2 py-1 text-xs font-semibold`}>
+                  {signal.pulse}
+                </span>
+              </div>
+              <p className={`mt-3 font-mono text-2xl font-semibold ${colors.text}`}>{signal.value}</p>
+              <p className="mt-1 text-xs text-[#687080]">{signal.baseline}</p>
+              <p className="mt-3 truncate text-sm text-[#4f5867]">{signal.sample}</p>
+            </div>
+          );
+        })}
+      </div>
+    </article>
+  );
+}
+
 function GoogleMentionPanel({
   configured,
   signals,
@@ -781,51 +861,130 @@ function GoogleMentionPanel({
   );
 }
 
-function SemiconductorOntologyPanel() {
+function ResearchDrawer({
+  dataSourceRows,
+  googleConfigured,
+  googleSignals,
+  googleError,
+  googleFetchedAt,
+  googleLoading,
+  onGoogleRefresh,
+}: {
+  dataSourceRows: ReturnType<typeof buildSourceRows>;
+  googleConfigured: boolean | null;
+  googleSignals: GoogleMentionSignal[];
+  googleError: string | null;
+  googleFetchedAt: string | null;
+  googleLoading: boolean;
+  onGoogleRefresh: () => void;
+}) {
   return (
-    <section className="mx-auto w-full max-w-7xl px-4 pb-6 sm:px-6">
-      <article className="rounded-lg border border-[#d9dee7] bg-white p-5 shadow-sm">
-        <div className="flex flex-wrap items-center justify-between gap-3">
-          <div>
-            <h2 className="text-lg font-semibold text-[#171a1f]">글로벌 반도체 온톨로지</h2>
-            <p className="mt-1 text-sm text-[#687080]">
-              전세계 시장참여자를 비용 없이 구조화해서 한국 반도체 심리 신호와 연결합니다.
-            </p>
-          </div>
-          <span className="rounded-md border border-[#bfe8ca] bg-[#eef8f1] px-3 py-2 text-xs font-semibold text-[#246b45]">
-            비용 0원
-          </span>
-        </div>
+    <section className="border-t border-[#d9dee7] bg-white">
+      <div className="mx-auto w-full max-w-7xl px-4 py-6 sm:px-6">
+        <details className="group">
+          <summary className="flex cursor-pointer list-none flex-wrap items-center justify-between gap-3">
+            <div>
+              <h2 className="text-lg font-semibold text-[#171a1f]">리서치 보관함</h2>
+              <p className="mt-1 text-sm text-[#687080]">가중치, 데이터 경로, 반도체 온톨로지, 수동 웹 검색</p>
+            </div>
+            <span className="rounded-md border border-[#b9c2cf] bg-white px-3 py-2 text-xs font-semibold text-[#20242b] transition group-open:bg-[#f0f3f7]">
+              펼치기
+            </span>
+          </summary>
 
-        <div className="mt-5 grid gap-3 lg:grid-cols-3">
-          {semiconductorOntology.map((item) => {
-            const colors = toneClasses(item.tone);
-
-            return (
-              <article key={item.layer} className={`rounded-lg border ${colors.border} ${colors.bg} p-4`}>
-                <div className="flex items-start justify-between gap-3">
-                  <div>
-                    <h3 className={`text-base font-semibold ${colors.text}`}>{item.layer}</h3>
-                    <p className="mt-2 text-sm leading-6 text-[#20242b]">{item.read}</p>
+          <div className="mt-5 grid min-w-0 gap-5 lg:grid-cols-2">
+            <article className="min-w-0 rounded-lg border border-[#d9dee7] bg-white p-5">
+              <h3 className="text-base font-semibold text-[#171a1f]">지수 구성</h3>
+              <div className="mt-4 grid gap-4">
+                {[
+                  ["FOMO", 34, "늦었나요/살까요 비율과 증가 속도"],
+                  ["시장 온도", 26, "등락률, 가격폭, 상승 종목 비율"],
+                  ["탐욕 언어", 20, "확신형 문장과 테마 쏠림"],
+                  ["공포 역산", 10, "공포가 낮을수록 탐욕 점수 상승"],
+                  ["빚투 위험", 10, "레버리지성 표현과 과열 리스크"],
+                ].map(([name, weight, detail]) => (
+                  <div key={name} className="grid grid-cols-[76px_1fr] items-center gap-3">
+                    <p className="font-semibold text-[#20242b]">{name}</p>
+                    <div>
+                      <div className="flex items-center gap-3">
+                        <ScoreBar score={Number(weight)} tone="neutral" />
+                        <span className="w-10 text-right font-mono text-sm text-[#555f70]">{weight}%</span>
+                      </div>
+                      <p className="mt-1 text-sm text-[#687080]">{detail}</p>
+                    </div>
                   </div>
-                </div>
-                <p className="mt-3 text-xs font-semibold text-[#687080]">{item.actors}</p>
-                <div className="mt-3 flex flex-wrap gap-1.5">
-                  {item.signals.map((signal) => (
-                    <span
-                      key={`${item.layer}-${signal}`}
-                      className="rounded-md border border-[#d9dee7] bg-white px-2 py-1 text-xs font-medium text-[#4f5867]"
-                    >
-                      {signal}
-                    </span>
-                  ))}
-                </div>
-                <p className="mt-4 border-t border-black/10 pt-3 text-sm text-[#4f5867]">{item.koreaLink}</p>
-              </article>
-            );
-          })}
-        </div>
-      </article>
+                ))}
+              </div>
+            </article>
+
+            <article className="min-w-0 rounded-lg border border-[#d9dee7] bg-white p-5">
+              <h3 className="text-base font-semibold text-[#171a1f]">데이터 상태</h3>
+              <div className="mt-4 grid gap-3">
+                {dataSourceRows.map((row) => (
+                  <div key={row.source} className="grid gap-1 border-t border-[#edf0f4] pt-3 first:border-t-0 first:pt-0">
+                    <div className="flex flex-wrap items-center justify-between gap-2">
+                      <p className="font-semibold text-[#171a1f]">{row.source}</p>
+                      <span className="rounded-md border border-[#d9dee7] bg-[#f7f8fa] px-2 py-1 text-xs font-semibold text-[#4f5867]">
+                        {row.status}
+                      </span>
+                    </div>
+                    <p className="text-sm text-[#20242b]">{row.path}</p>
+                    <p className="text-sm text-[#687080]">{row.role}</p>
+                  </div>
+                ))}
+              </div>
+            </article>
+          </div>
+
+          <div className="mt-6">
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <div>
+                <h3 className="text-base font-semibold text-[#171a1f]">글로벌 반도체 온톨로지</h3>
+                <p className="mt-1 text-sm text-[#687080]">한국 종목에 연결되는 해외 신호만 보관합니다.</p>
+              </div>
+              <span className="rounded-md border border-[#bfe8ca] bg-[#eef8f1] px-3 py-2 text-xs font-semibold text-[#246b45]">
+                비용 0원
+              </span>
+            </div>
+
+            <div className="mt-4 grid gap-3 lg:grid-cols-3">
+              {semiconductorOntology.map((item) => {
+                const colors = toneClasses(item.tone);
+
+                return (
+                  <article key={item.layer} className={`rounded-lg border ${colors.border} ${colors.bg} p-4`}>
+                    <h4 className={`text-base font-semibold ${colors.text}`}>{item.layer}</h4>
+                    <p className="mt-2 text-sm leading-6 text-[#20242b]">{item.read}</p>
+                    <p className="mt-3 text-xs font-semibold text-[#687080]">{item.actors}</p>
+                    <div className="mt-3 flex flex-wrap gap-1.5">
+                      {item.signals.slice(0, 3).map((signal) => (
+                        <span
+                          key={`${item.layer}-${signal}`}
+                          className="rounded-md border border-[#d9dee7] bg-white px-2 py-1 text-xs font-medium text-[#4f5867]"
+                        >
+                          {signal}
+                        </span>
+                      ))}
+                    </div>
+                    <p className="mt-4 border-t border-black/10 pt-3 text-sm text-[#4f5867]">{item.koreaLink}</p>
+                  </article>
+                );
+              })}
+            </div>
+          </div>
+
+          <div className="mt-6">
+            <GoogleMentionPanel
+              configured={googleConfigured}
+              signals={googleSignals}
+              error={googleError}
+              fetchedAt={googleFetchedAt}
+              loading={googleLoading}
+              onRefresh={onGoogleRefresh}
+            />
+          </div>
+        </details>
+      </div>
     </section>
   );
 }
@@ -951,6 +1110,8 @@ export default function MoodBoard() {
     [fetchedAt, model.composite, model.fear, model.fomo, model.marketHeat],
   );
   const label = indexLabel(model.composite);
+  const decision = decisionCopy(model.composite);
+  const decisionColors = toneClasses(decision.tone);
 
   useEffect(() => {
     const timer = window.setTimeout(() => {
@@ -1007,7 +1168,7 @@ export default function MoodBoard() {
         </div>
       </header>
 
-      <section className="mx-auto grid w-full max-w-7xl gap-5 px-4 py-6 sm:px-6 lg:grid-cols-[1.05fr_1.45fr]">
+      <section className="mx-auto grid w-full max-w-7xl gap-5 px-4 py-6 sm:px-6 lg:grid-cols-[0.95fr_1.35fr]">
         <article className="min-w-0 max-w-full overflow-hidden rounded-lg border border-[#d9dee7] bg-white p-5 shadow-sm">
           <div className="flex flex-wrap items-start justify-between gap-4">
             <div>
@@ -1020,11 +1181,20 @@ export default function MoodBoard() {
               {label}
             </span>
           </div>
-          <div className="mt-6">
+
+          <div className={`mt-5 rounded-lg border ${decisionColors.border} ${decisionColors.bg} p-4`}>
+            <p className={`text-sm font-semibold ${decisionColors.text}`}>{decision.title}</p>
+            <p className="mt-1 text-sm leading-6 text-[#3f4652]">{decision.body}</p>
+          </div>
+
+          <div className="mt-5">
             <MoodScale score={model.composite} />
           </div>
           <ScoreHistoryChart points={scoreHistory} currentPoint={currentScorePoint} />
-          <div className="mt-6 grid gap-3 sm:grid-cols-2">
+        </article>
+
+        <div className="grid min-w-0 gap-5">
+          <div className="order-2 grid gap-3 sm:grid-cols-2 lg:order-1">
             <MetricTile
               label="FOMO 가속도"
               value={model.fomo.toString()}
@@ -1037,11 +1207,6 @@ export default function MoodBoard() {
               caption={`평균 등락 ${formatSignedRate(model.avgChange)}`}
               tone="calm"
             />
-          </div>
-        </article>
-
-        <div className="grid min-w-0 gap-5">
-          <div className="grid gap-3 sm:grid-cols-3">
             <MetricTile
               label="탐욕 언어"
               value={model.greed.toString()}
@@ -1054,146 +1219,44 @@ export default function MoodBoard() {
               caption="손절·폭락·반대매매"
               tone="fear"
             />
-            <MetricTile
-              label="빚투 위험"
-              value={model.leverageRisk.toString()}
-              caption="신용·미수·몰빵 문맥"
-              tone="neutral"
-            />
           </div>
 
-          <article className="min-w-0 rounded-lg border border-[#d9dee7] bg-white p-5 shadow-sm">
-            <div className="flex flex-wrap items-center justify-between gap-3">
-              <div>
-                <h2 className="text-lg font-semibold text-[#171a1f]">인간지표 입력값</h2>
-                <p className="mt-1 text-sm text-[#687080]">
-                  댓글 원문이 아니라 시간대별 집계값으로 계산하는 설계입니다.
-                </p>
-              </div>
-              <span className="rounded-md border border-[#fde68a] bg-[#fffbeb] px-3 py-2 text-xs font-semibold text-[#8a5208]">
-                모델 MVP
-              </span>
+          <section className="order-1 min-w-0 rounded-lg border border-[#d9dee7] bg-white p-5 shadow-sm lg:order-2">
+            <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
+              <h2 className="text-lg font-semibold text-[#171a1f]">관심 종목</h2>
+              <p className="text-sm text-[#687080]">
+                {loading ? "가격 확인 중" : error ? "가격 API 확인 필요" : "가격 연결됨"}
+              </p>
             </div>
-            <div className="mt-5 grid gap-4">
-              {psychologySignals.map((signal) => {
-                const colors = toneClasses(signal.tone);
-
-                return (
-                  <div key={signal.id} className="grid gap-3 border-t border-[#edf0f4] pt-4 first:border-t-0 first:pt-0 md:grid-cols-[minmax(0,1fr)_120px_90px] md:items-center">
-                    <div className="min-w-0">
-                      <div className="flex flex-wrap items-center gap-2">
-                        <p className="font-semibold text-[#171a1f]">{signal.label}</p>
-                        <span className={`${colors.bg} ${colors.text} rounded-md px-2 py-1 text-xs font-semibold`}>
-                          {signal.pulse}
-                        </span>
-                      </div>
-                      <p className="mt-1 text-sm text-[#687080]">{signal.sample}</p>
-                    </div>
-                    <div>
-                      <p className="font-mono text-xl font-semibold text-[#20242b]">{signal.value}</p>
-                      <p className="mt-1 text-xs text-[#687080]">{signal.baseline}</p>
-                    </div>
-                    <ScoreBar score={signal.score} tone={signal.tone} />
-                  </div>
-                );
-              })}
-            </div>
-          </article>
-
-          <SearchTrendPanel
-            configured={trendConfigured}
-            signals={trendSignals}
-            error={trendError}
-            fetchedAt={trendFetchedAt}
-          />
-
-          <GoogleMentionPanel
-            configured={googleConfigured}
-            signals={googleSignals}
-            error={googleError}
-            fetchedAt={googleFetchedAt}
-            loading={googleLoading}
-            onRefresh={() => void loadGoogleSearch()}
-          />
-        </div>
-      </section>
-
-      <SemiconductorOntologyPanel />
-
-      <section className="mx-auto w-full max-w-7xl px-4 pb-6 sm:px-6">
-        <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
-          <h2 className="text-lg font-semibold text-[#171a1f]">가격 움직임</h2>
-          <p className="text-sm text-[#687080]">
-            {loading ? "가격 확인 중" : error ? "가격 API 확인 필요" : "가격 데이터 연결됨"}
-          </p>
-        </div>
-        {error ? (
-          <div className="mb-4 rounded-lg border border-[#e0ae35] bg-[#fff8e6] px-4 py-3 text-sm text-[#6e4b00]">
-            {error}
-          </div>
-        ) : null}
-        <QuoteStrip quotes={quotes} />
-      </section>
-
-      <section className="border-t border-[#d9dee7] bg-white">
-        <div className="mx-auto w-full max-w-7xl px-4 py-6 sm:px-6">
-          <div className="grid min-w-0 gap-5 lg:grid-cols-[0.9fr_1.1fr]">
-            <article className="min-w-0 rounded-lg border border-[#d9dee7] bg-white p-5">
-              <h2 className="text-lg font-semibold text-[#171a1f]">지수 구성</h2>
-              <div className="mt-5 grid gap-4">
-                {[
-                  ["FOMO", 34, "늦었나요/살까요 비율과 증가 속도"],
-                  ["시장 온도", 26, "등락률, 가격폭, 상승 종목 비율"],
-                  ["탐욕 언어", 20, "확신형 문장과 테마 쏠림"],
-                  ["공포 역산", 10, "공포가 낮을수록 탐욕 점수 상승"],
-                  ["빚투 위험", 10, "레버리지성 표현과 과열 리스크"],
-                ].map(([name, weight, detail]) => (
-                  <div key={name} className="grid grid-cols-[76px_1fr] items-center gap-3">
-                    <p className="font-semibold text-[#20242b]">{name}</p>
-                    <div>
-                      <div className="flex items-center gap-3">
-                        <ScoreBar score={Number(weight)} tone="neutral" />
-                        <span className="w-10 text-right font-mono text-sm text-[#555f70]">{weight}%</span>
-                      </div>
-                      <p className="mt-1 text-sm text-[#687080]">{detail}</p>
-                    </div>
-                  </div>
-                ))}
+            {error ? (
+              <div className="mb-4 rounded-lg border border-[#e0ae35] bg-[#fff8e6] px-4 py-3 text-sm text-[#6e4b00]">
+                {error}
               </div>
-            </article>
-
-            <article className="min-w-0 rounded-lg border border-[#d9dee7] bg-white p-5">
-              <h2 className="text-lg font-semibold text-[#171a1f]">데이터 수집 경로</h2>
-              <div className="mt-4 overflow-x-auto">
-                <table className="min-w-[680px] w-full border-collapse text-left text-sm">
-                  <thead className="border-b border-[#d9dee7] text-xs text-[#687080]">
-                    <tr>
-                      <th className="py-3 pr-4 font-semibold">축</th>
-                      <th className="px-4 py-3 font-semibold">경로</th>
-                      <th className="px-4 py-3 font-semibold">역할</th>
-                      <th className="py-3 pl-4 font-semibold">상태</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {dataSourceRows.map((row) => (
-                      <tr key={row.source} className="border-b border-[#edf0f4] last:border-b-0">
-                        <td className="py-3 pr-4 font-semibold text-[#171a1f]">{row.source}</td>
-                        <td className="px-4 py-3 text-[#20242b]">{row.path}</td>
-                        <td className="px-4 py-3 text-[#555f70]">{row.role}</td>
-                        <td className="py-3 pl-4">
-                          <span className="rounded-md border border-[#d9dee7] bg-[#f7f8fa] px-2 py-1 text-xs font-semibold text-[#4f5867]">
-                            {row.status}
-                          </span>
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            </article>
-          </div>
+            ) : null}
+            <QuoteStrip quotes={quotes} />
+          </section>
         </div>
       </section>
+
+      <section className="mx-auto grid w-full max-w-7xl gap-5 px-4 pb-6 sm:px-6 lg:grid-cols-[0.95fr_1.35fr]">
+        <PsychologyPulsePanel />
+        <SearchTrendPanel
+          configured={trendConfigured}
+          signals={trendSignals}
+          error={trendError}
+          fetchedAt={trendFetchedAt}
+        />
+      </section>
+
+      <ResearchDrawer
+        dataSourceRows={dataSourceRows}
+        googleConfigured={googleConfigured}
+        googleSignals={googleSignals}
+        googleError={googleError}
+        googleFetchedAt={googleFetchedAt}
+        googleLoading={googleLoading}
+        onGoogleRefresh={() => void loadGoogleSearch()}
+      />
     </main>
   );
 }
