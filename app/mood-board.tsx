@@ -497,15 +497,20 @@ function buildModel(quotes: Quote[]) {
   const avgRange = average(ranges);
   const upRatio =
     quotes.length === 0 ? 0.5 : quotes.filter((quote) => quote.direction === "up").length / quotes.length;
+  const downRatio =
+    quotes.length === 0 ? 0.5 : quotes.filter((quote) => quote.direction === "down").length / quotes.length;
+  const crowdDirectionRatio = Math.max(upRatio, downRatio);
   const maxMove = rates.length === 0 ? 0 : Math.max(...rates);
 
-  const marketHeat = Math.round(clamp(48 + avgChange * 9 + avgRange * 3 + upRatio * 18));
-  const fomo = Math.round(clamp(78 + Math.max(0, avgChange) * 4 + Math.max(0, maxMove) * 2));
-  const greed = Math.round(clamp(58 + marketHeat * 0.22 + fomo * 0.18));
-  const fear = Math.round(clamp(42 + Math.max(0, -avgChange) * 10 + avgRange * 2 - upRatio * 12));
+  const marketHeat = Math.round(clamp(24 + Math.abs(avgChange) * 4 + avgRange * 4 + crowdDirectionRatio * 12));
+  const fomo = Math.round(
+    clamp(44 + Math.max(0, avgChange) * 7 + Math.max(0, maxMove) * 3 + upRatio * 14 + marketHeat * 0.08),
+  );
+  const greed = Math.round(clamp(38 + Math.max(0, avgChange) * 8 + Math.max(0, maxMove) * 4 + upRatio * 18));
+  const fear = Math.round(clamp(34 + Math.max(0, -avgChange) * 7 + avgRange * 3 + downRatio * 16));
   const leverageRisk = 66;
   const composite = Math.round(
-    clamp(marketHeat * 0.26 + fomo * 0.34 + greed * 0.2 + (100 - fear) * 0.1 + leverageRisk * 0.1),
+    clamp(fomo * 0.3 + greed * 0.22 + marketHeat * 0.1 + (100 - fear) * 0.28 + leverageRisk * 0.1),
   );
 
   return {
@@ -518,6 +523,7 @@ function buildModel(quotes: Quote[]) {
     avgChange,
     avgRange,
     upRatio,
+    downRatio,
   };
 }
 
@@ -637,10 +643,10 @@ function ScoreHistoryChart({ points, currentPoint }: { points: ScorePoint[]; cur
         </svg>
       </div>
 
-      <div className="mt-3 flex flex-wrap items-center justify-between gap-2 text-xs text-[#687080]">
-        <span>{hasHistory ? formatCompactTime(first.t) : "-"}</span>
-        <span>현재 {latest.score}</span>
-        <span>{hasHistory ? formatCompactTime(latest.t) : "-"}</span>
+      <div className="mt-3 grid grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)] items-center gap-2 text-xs text-[#687080]">
+        <span className="min-w-0 truncate">{hasHistory ? formatCompactTime(first.t) : "-"}</span>
+        <span className="shrink-0">현재 {latest.score}</span>
+        <span className="min-w-0 truncate text-right">{hasHistory ? formatCompactTime(latest.t) : "-"}</span>
       </div>
     </section>
   );
@@ -684,7 +690,7 @@ function QuoteStrip({ quotes }: { quotes: Quote[] }) {
           quote.direction === "up" ? "text-[#d91f3d]" : quote.direction === "down" ? "text-[#1f64d8]" : "text-[#4f5867]";
 
         return (
-          <article key={quote.code} className="rounded-lg border border-[#d9dee7] bg-white p-4 shadow-sm">
+          <article key={quote.code} className="min-w-0 rounded-lg border border-[#d9dee7] bg-white p-4 shadow-sm">
             <div className="flex items-start justify-between gap-3">
               <div>
                 <h3 className="text-lg font-semibold text-[#171a1f]">{quote.name}</h3>
@@ -694,14 +700,16 @@ function QuoteStrip({ quotes }: { quotes: Quote[] }) {
                 {quote.sessionLabel}
               </span>
             </div>
-            <div className="mt-4 flex items-end justify-between gap-3">
-              <div>
-                <p className="font-mono text-3xl font-semibold text-[#111317]">{quote.priceText}</p>
-                <p className="mt-1 text-xs text-[#687080]">{quote.marketStatusLabel}</p>
-              </div>
-              <div className={`text-right font-mono font-semibold ${moveClass}`}>
-                <p>{quote.changeRateText}</p>
-                <p className="mt-1 text-xs">폭 {quote.rangeRateText}</p>
+            <div className="mt-4 min-w-0">
+              <p className="font-mono text-2xl font-semibold tracking-normal text-[#111317] xl:text-3xl">
+                {quote.priceText}
+              </p>
+              <div className="mt-2 flex items-end justify-between gap-2">
+                <p className="text-xs text-[#687080]">{quote.marketStatusLabel}</p>
+                <div className={`shrink-0 text-right font-mono text-sm font-semibold ${moveClass}`}>
+                  <p>{quote.changeRateText}</p>
+                  <p className="mt-1 text-xs">폭 {quote.rangeRateText}</p>
+                </div>
               </div>
             </div>
           </article>
@@ -1399,7 +1407,7 @@ export default function MoodBoard() {
             <MetricTile
               label="시장 온도"
               value={model.marketHeat.toString()}
-              caption={`평균 등락 ${formatSignedRate(model.avgChange)}`}
+              caption={`평균 ${formatSignedRate(model.avgChange)} · 폭 ${model.avgRange.toFixed(2)}%`}
               tone="calm"
             />
             <MetricTile

@@ -25,34 +25,23 @@ const NAVER_DATALAB_ENDPOINT = "https://openapi.naver.com/v1/datalab/search";
 const KEYWORD_GROUPS = [
   {
     groupName: "FOMO",
-    keywords: ["살까요", "늦었나요", "사도 되나요", "지금 사도", "진입해도"],
+    keywords: ["급등주", "상한가 종목", "테마주", "특징주", "주식 추천"],
   },
   {
     groupName: "공포",
-    keywords: ["손절", "폭락", "반대매매", "망했다", "물렸다"],
+    keywords: ["주식 폭락", "코스피 폭락", "주가 하락", "손절", "반대매매"],
   },
   {
     groupName: "탐욕",
-    keywords: ["상한가", "간다", "텐배거", "급등", "목표가"],
+    keywords: ["상한가", "목표가", "수혜주", "신고가", "주도주"],
   },
   {
     groupName: "빚투",
-    keywords: ["신용융자", "미수거래", "주식 대출", "몰빵", "반대매매"],
+    keywords: ["신용융자", "미수거래", "주식담보대출", "반대매매", "빚투"],
   },
   {
     groupName: "반도체",
-    keywords: [
-      "HBM",
-      "DRAM",
-      "낸드",
-      "파운드리",
-      "반도체 장비",
-      "엔비디아",
-      "TSMC",
-      "ASML",
-      "삼성전자",
-      "SK하이닉스",
-    ],
+    keywords: ["삼성전자 주가", "SK하이닉스 주가", "HBM", "엔비디아 주가", "반도체 주식"],
   },
 ];
 
@@ -79,6 +68,11 @@ function clamp(value: number, min = 0, max = 100) {
   return Math.min(max, Math.max(min, value));
 }
 
+function formatRatio(value: number) {
+  if (value > 0 && value < 0.1) return "<0.1";
+  return value.toFixed(1);
+}
+
 function toSignal(result: DatalabResult): TrendSignal {
   const data = result.data ?? [];
   const ratios = data
@@ -86,19 +80,66 @@ function toSignal(result: DatalabResult): TrendSignal {
     .filter((value): value is number => typeof value === "number" && Number.isFinite(value));
   const latest = ratios.at(-1) ?? 0;
   const recentAverage = average(ratios.slice(-14, -1));
-  const acceleration = recentAverage > 0 ? latest / recentAverage : latest > 0 ? 1 : 0;
-  const pulse = acceleration >= 1 ? `+${Math.round((acceleration - 1) * 100)}%` : `-${Math.round((1 - acceleration) * 100)}%`;
+  const floor = 0.05;
+  const acceleration = recentAverage > floor ? latest / recentAverage : latest > floor ? 1 : 0;
+  const pulse =
+    latest <= floor && recentAverage <= floor
+      ? "희박"
+      : recentAverage <= floor
+        ? "신규"
+        : acceleration >= 1
+          ? `+${Math.round((acceleration - 1) * 100)}%`
+          : `-${Math.round((1 - acceleration) * 100)}%`;
 
   return {
     id: `search-${result.title ?? "unknown"}`,
     label: `${result.title ?? "검색"} 검색`,
-    value: latest.toFixed(1),
-    baseline: `최근 14일 평균 ${recentAverage.toFixed(1)}`,
+    value: formatRatio(latest),
+    baseline: `그룹 내 14일 평균 ${formatRatio(recentAverage)}`,
     score: Math.round(clamp(latest)),
     pulse,
     sample: (result.keywords ?? []).slice(0, 5).join(" · "),
     source: "naver-datalab",
   };
+}
+
+async function fetchTrendGroup(
+  group: (typeof KEYWORD_GROUPS)[number],
+  clientId: string,
+  clientSecret: string,
+  startDate: string,
+  endDate: string,
+) {
+  const response = await fetch(NAVER_DATALAB_ENDPOINT, {
+    method: "POST",
+    cache: "no-store",
+    headers: {
+      "Content-Type": "application/json",
+      "X-Naver-Client-Id": clientId,
+      "X-Naver-Client-Secret": clientSecret,
+    },
+    body: JSON.stringify({
+      startDate,
+      endDate,
+      timeUnit: "date",
+      keywordGroups: [group],
+    }),
+  });
+
+  const payload = (await response.json()) as {
+    startDate?: string;
+    endDate?: string;
+    timeUnit?: string;
+    results?: DatalabResult[];
+    errorCode?: string;
+    errorMessage?: string;
+  };
+
+  if (!response.ok) {
+    throw new Error(payload.errorMessage ?? `Naver DataLab returned ${response.status}`);
+  }
+
+  return payload;
 }
 
 export async function GET() {
@@ -125,36 +166,16 @@ export async function GET() {
   }
 
   try {
-    const response = await fetch(NAVER_DATALAB_ENDPOINT, {
-      method: "POST",
-      cache: "no-store",
-      headers: {
-        "Content-Type": "application/json",
-        "X-Naver-Client-Id": clientId,
-        "X-Naver-Client-Secret": clientSecret,
-      },
-      body: JSON.stringify({
-        startDate: formatDate(dateDaysAgo(30)),
-        endDate: formatDate(dateDaysAgo(1)),
-        timeUnit: "date",
-        keywordGroups: KEYWORD_GROUPS,
-      }),
-    });
+    const startDate = formatDate(dateDaysAgo(30));
+    const endDate = formatDate(dateDaysAgo(1));
+    const payloads = [];
 
-    const payload = (await response.json()) as {
-      startDate?: string;
-      endDate?: string;
-      timeUnit?: string;
-      results?: DatalabResult[];
-      errorCode?: string;
-      errorMessage?: string;
-    };
-
-    if (!response.ok) {
-      throw new Error(payload.errorMessage ?? `Naver DataLab returned ${response.status}`);
+    for (const group of KEYWORD_GROUPS) {
+      payloads.push(await fetchTrendGroup(group, clientId, clientSecret, startDate, endDate));
     }
 
-    const signals = (payload.results ?? []).map(toSignal);
+    const signals = payloads.flatMap((payload) => payload.results ?? []).map(toSignal);
+    const firstPayload = payloads[0];
 
     return Response.json(
       {
@@ -162,9 +183,9 @@ export async function GET() {
         source: "Naver DataLab Search Trend",
         fetchedAt: new Date().toISOString(),
         latencyMs: Date.now() - startedAt,
-        startDate: payload.startDate,
-        endDate: payload.endDate,
-        timeUnit: payload.timeUnit,
+        startDate: firstPayload?.startDate ?? startDate,
+        endDate: firstPayload?.endDate ?? endDate,
+        timeUnit: firstPayload?.timeUnit ?? "date",
         signals,
       },
       {
