@@ -95,6 +95,10 @@ function scoreFromMentions(total: number) {
   return Math.round(clamp(Math.log10(total + 1) * 22));
 }
 
+function sleep(ms: number) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
 function isSearchAuthorizationError(error: unknown) {
   const message = error instanceof Error ? error.message : String(error);
   return /Scope Status Invalid|Authentication failed|인증에 실패/i.test(message);
@@ -144,11 +148,15 @@ async function fetchSearch(
 
 async function buildSignal(config: MentionQuery, clientId: string, clientSecret: string) {
   const sources = Object.keys(NAVER_SEARCH_ENDPOINTS) as MentionSource[];
-  const responses = await Promise.all(
-    config.queries.flatMap((query) =>
-      sources.map((source) => fetchSearch(source, query, clientId, clientSecret)),
-    ),
-  );
+  const responses: Awaited<ReturnType<typeof fetchSearch>>[] = [];
+
+  for (const query of config.queries) {
+    for (const source of sources) {
+      responses.push(await fetchSearch(source, query, clientId, clientSecret));
+      await sleep(140);
+    }
+  }
+
   const total = responses.reduce((sum, response) => sum + response.total, 0);
   const sourceTotals = sources.map((source) => ({
     source,
@@ -209,9 +217,11 @@ export async function GET() {
   }
 
   try {
-    const signals = await Promise.all(
-      MENTION_QUERIES.map((query) => buildSignal(query, clientId, clientSecret)),
-    );
+    const signals = [];
+
+    for (const query of MENTION_QUERIES) {
+      signals.push(await buildSignal(query, clientId, clientSecret));
+    }
 
     return Response.json(
       {
