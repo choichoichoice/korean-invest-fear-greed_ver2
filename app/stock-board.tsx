@@ -285,7 +285,7 @@ export default function StockBoard() {
           <div className="min-w-0">
             <p className="text-sm font-semibold text-[#4f6f52]">KRX · NXT 통합 관찰</p>
             <h1 className="mt-1 text-3xl font-semibold leading-tight text-[#111317]">
-              삼성전자 · SK하이닉스 · 현대차
+              삼성전자 · SK하이닉스
             </h1>
           </div>
 
@@ -311,7 +311,7 @@ export default function StockBoard() {
         <div className="grid gap-3 border-b border-[#d9dee7] pb-5 md:grid-cols-3">
           <div>
             <p className="text-xs font-medium text-[#687080]">거래중 종목</p>
-            <p className="mt-1 font-mono text-2xl font-semibold">{marketSummary.active}/{quotes.length || 3}</p>
+            <p className="mt-1 font-mono text-2xl font-semibold">{marketSummary.active}/{quotes.length || 2}</p>
           </div>
           <div>
             <p className="text-xs font-medium text-[#687080]">가장 큰 가격폭</p>
@@ -333,7 +333,7 @@ export default function StockBoard() {
           </div>
         ) : null}
 
-        <div className="mt-6 grid gap-4 lg:grid-cols-3">
+        <div className="mt-6 grid gap-4 lg:grid-cols-2">
           {quotes.map((quote) => (
             <StockCard key={quote.code} quote={quote} />
           ))}

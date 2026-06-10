@@ -61,8 +61,8 @@ const MENTION_QUERIES: MentionQuery[] = [
   {
     id: "free-watchlist",
     label: "관심종목 언급",
-    sample: "삼성전자 · SK하이닉스 · 현대차",
-    queries: ["삼성전자 주식", "SK하이닉스 주식", "현대차 주식"],
+    sample: "삼성전자 · SK하이닉스",
+    queries: ["삼성전자 주식", "SK하이닉스 주식"],
     tone: "neutral",
   },
 ];
@@ -203,7 +203,7 @@ export async function GET() {
         fetchedAt: new Date().toISOString(),
         latencyMs: Date.now() - startedAt,
         dailyCallBudget: 25000,
-        estimatedCallsPerRefresh: 36,
+        estimatedCallsPerRefresh: 33,
         signals: [],
         message:
           "NAVER_SEARCH_CLIENT_ID/NAVER_SEARCH_CLIENT_SECRET or NAVER_DATALAB_CLIENT_ID/NAVER_DATALAB_CLIENT_SECRET are required.",
@@ -230,7 +230,7 @@ export async function GET() {
         fetchedAt: new Date().toISOString(),
         latencyMs: Date.now() - startedAt,
         dailyCallBudget: 25000,
-        estimatedCallsPerRefresh: 36,
+        estimatedCallsPerRefresh: 33,
         signals,
       },
       {
@@ -249,7 +249,7 @@ export async function GET() {
         fetchedAt: new Date().toISOString(),
         latencyMs: Date.now() - startedAt,
         dailyCallBudget: 25000,
-        estimatedCallsPerRefresh: 36,
+        estimatedCallsPerRefresh: 33,
         signals: [],
         error: authorizationError
           ? searchApiSetupMessage()

@@ -29,6 +29,30 @@ type QuoteResponse = {
   error?: string;
 };
 
+type MarketIndicator = {
+  id: string;
+  label: string;
+  value: number | null;
+  valueText: string;
+  change: number | null;
+  changeText: string;
+  changeRate: number | null;
+  changeRateText: string;
+  direction: Direction;
+  statusLabel: string;
+  tradedAt: string | null;
+  source: string;
+  note: string;
+};
+
+type MarketContextResponse = {
+  fetchedAt?: string;
+  latencyMs?: number;
+  indicators?: MarketIndicator[];
+  errors?: string[];
+  error?: string;
+};
+
 type TrendSignal = {
   id: string;
   label: string;
@@ -138,6 +162,7 @@ type ScorePoint = {
 };
 
 const MODEL_REFRESH_MS = 15000;
+const MARKET_CONTEXT_REFRESH_MS = 60 * 1000;
 const SEARCH_REFRESH_MS = 60 * 60 * 1000;
 const FREE_MENTION_REFRESH_MS = 60 * 60 * 1000;
 const SCORE_HISTORY_KEY = "kfg:score-history:v1";
@@ -245,7 +270,7 @@ const semiconductorOntology: OntologyLayer[] = [
     read: "AI 말고 PC·모바일·차량용이 같이 회복되는지",
     actors: "Apple · Qualcomm · Tesla · automakers",
     signals: ["스마트폰 출하", "PC 출하", "전장 재고", "산업재 PMI"],
-    koreaLink: "메모리 범용 수요와 현대차 전장 밸류체인",
+    koreaLink: "메모리 범용 수요와 차량용 반도체 밸류체인",
     tone: "neutral",
   },
   {
@@ -272,7 +297,7 @@ function buildSourceRows(
   {
     source: "가격",
     path: "현재: 네이버 금융 프록시",
-    role: "삼성전자·하이닉스·현대차 가격폭, 등락률, 장 상태",
+    role: "삼성전자·하이닉스 가격폭, 등락률, 장 상태",
     status: "연결됨",
   },
   {
@@ -429,6 +454,12 @@ function toneClasses(tone: SignalTone) {
   };
 
   return map[tone];
+}
+
+function directionTextClass(direction: Direction) {
+  if (direction === "up") return "text-[#b4232c]";
+  if (direction === "down") return "text-[#1d4ed8]";
+  return "text-[#4f5867]";
 }
 
 function indexLabel(score: number) {
@@ -684,7 +715,7 @@ function QuoteStrip({ quotes }: { quotes: Quote[] }) {
   }
 
   return (
-    <div className="grid gap-3 lg:grid-cols-3">
+    <div className="grid gap-3 sm:grid-cols-2">
       {quotes.map((quote) => {
         const moveClass =
           quote.direction === "up" ? "text-[#d91f3d]" : quote.direction === "down" ? "text-[#1f64d8]" : "text-[#4f5867]";
@@ -716,6 +747,69 @@ function QuoteStrip({ quotes }: { quotes: Quote[] }) {
         );
       })}
     </div>
+  );
+}
+
+function MarketContextPanel({
+  indicators,
+  error,
+  fetchedAt,
+}: {
+  indicators: MarketIndicator[];
+  error: string | null;
+  fetchedAt: string | null;
+}) {
+  const statusText = error ? "일부 확인 필요" : indicators.length > 0 ? `실데이터 ${formatTimestamp(fetchedAt)}` : "확인중";
+
+  return (
+    <section className="min-w-0 rounded-lg border border-[#d9dee7] bg-white p-5 shadow-sm">
+      <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
+        <div>
+          <h2 className="text-lg font-semibold text-[#171a1f]">시장 배경</h2>
+          <p className="mt-1 text-sm text-[#687080]">코스피·환율·나스닥·선물만 압축해서 봅니다.</p>
+        </div>
+        <span className="rounded-md border border-[#d9dee7] bg-[#f7f8fa] px-3 py-2 text-xs font-semibold text-[#4f5867]">
+          {statusText}
+        </span>
+      </div>
+
+      {error ? (
+        <div className="mb-4 rounded-lg border border-[#e0ae35] bg-[#fff8e6] px-4 py-3 text-sm text-[#6e4b00]">
+          {error}
+        </div>
+      ) : null}
+
+      {indicators.length > 0 ? (
+        <div className="grid gap-3 sm:grid-cols-2">
+          {indicators.map((indicator) => (
+            <article key={indicator.id} className="min-w-0 rounded-lg border border-[#edf0f4] bg-[#fbfcfd] p-4">
+              <div className="flex items-start justify-between gap-3">
+                <div className="min-w-0">
+                  <p className="truncate text-sm font-semibold text-[#171a1f]">{indicator.label}</p>
+                  <p className="mt-1 truncate text-xs text-[#687080]">{indicator.note}</p>
+                </div>
+                <span className="shrink-0 rounded-md border border-[#d9dee7] bg-white px-2 py-1 text-xs text-[#555f70]">
+                  {indicator.statusLabel}
+                </span>
+              </div>
+              <div className="mt-4 flex items-end justify-between gap-3">
+                <p className="min-w-0 truncate font-mono text-2xl font-semibold text-[#111317]">
+                  {indicator.valueText}
+                </p>
+                <div className={`shrink-0 text-right font-mono text-sm font-semibold ${directionTextClass(indicator.direction)}`}>
+                  <p>{indicator.changeText}</p>
+                  <p className="mt-1 text-xs">{indicator.changeRateText}</p>
+                </div>
+              </div>
+            </article>
+          ))}
+        </div>
+      ) : (
+        <div className="rounded-lg border border-[#d9dee7] bg-[#f7f8fa] px-4 py-3 text-sm text-[#555f70]">
+          시장 배경 데이터를 불러오는 중입니다.
+        </div>
+      )}
+    </section>
   );
 }
 
@@ -1163,6 +1257,9 @@ export default function MoodBoard() {
   const [naverMentionError, setNaverMentionError] = useState<string | null>(null);
   const [naverMentionDailyBudget, setNaverMentionDailyBudget] = useState<number | null>(null);
   const [naverMentionCallsPerRefresh, setNaverMentionCallsPerRefresh] = useState<number | null>(null);
+  const [marketIndicators, setMarketIndicators] = useState<MarketIndicator[]>([]);
+  const [marketContextFetchedAt, setMarketContextFetchedAt] = useState<string | null>(null);
+  const [marketContextError, setMarketContextError] = useState<string | null>(null);
   const [googleSignals, setGoogleSignals] = useState<GoogleMentionSignal[]>([]);
   const [googleConfigured, setGoogleConfigured] = useState<boolean | null>(null);
   const [googleFetchedAt, setGoogleFetchedAt] = useState<string | null>(null);
@@ -1191,6 +1288,26 @@ export default function MoodBoard() {
       setError(fetchError instanceof Error ? fetchError.message : "가격 데이터를 불러오지 못했습니다.");
     } finally {
       setLoading(false);
+    }
+  }, []);
+
+  const loadMarketContext = useCallback(async () => {
+    try {
+      const response = await fetch(`/api/market-context?ts=${Date.now()}`, { cache: "no-store" });
+      const payload = (await response.json()) as MarketContextResponse;
+
+      setMarketIndicators(payload.indicators ?? []);
+      setMarketContextFetchedAt(payload.fetchedAt ?? new Date().toISOString());
+
+      if (!response.ok || payload.error) {
+        throw new Error(payload.error ?? "시장 배경 데이터를 불러오지 못했습니다.");
+      }
+
+      setMarketContextError(
+        payload.errors && payload.errors.length > 0 ? `일부 지표 확인 필요: ${payload.errors[0]}` : null,
+      );
+    } catch (fetchError) {
+      setMarketContextError(fetchError instanceof Error ? fetchError.message : "시장 배경 데이터를 불러오지 못했습니다.");
     }
   }, []);
 
@@ -1259,13 +1376,14 @@ export default function MoodBoard() {
   useEffect(() => {
     const initialLoad = window.setTimeout(() => {
       void loadQuotes();
+      void loadMarketContext();
       void loadTrends();
       void loadNaverMentions();
       setScoreHistory(readScoreHistory());
     }, 0);
 
     return () => window.clearTimeout(initialLoad);
-  }, [loadNaverMentions, loadQuotes, loadTrends]);
+  }, [loadMarketContext, loadNaverMentions, loadQuotes, loadTrends]);
 
   useEffect(() => {
     const timer = window.setInterval(() => {
@@ -1276,6 +1394,16 @@ export default function MoodBoard() {
 
     return () => window.clearInterval(timer);
   }, [loadQuotes]);
+
+  useEffect(() => {
+    const timer = window.setInterval(() => {
+      if (document.visibilityState === "visible") {
+        void loadMarketContext();
+      }
+    }, MARKET_CONTEXT_REFRESH_MS);
+
+    return () => window.clearInterval(timer);
+  }, [loadMarketContext]);
 
   useEffect(() => {
     const timer = window.setInterval(() => {
@@ -1362,7 +1490,10 @@ export default function MoodBoard() {
             </span>
             <button
               type="button"
-              onClick={() => void loadQuotes()}
+              onClick={() => {
+                void loadQuotes();
+                void loadMarketContext();
+              }}
               className="rounded-md border border-[#b9c2cf] bg-white px-3 py-2 font-semibold text-[#20242b] transition hover:border-[#8793a6] hover:bg-[#f0f3f7]"
             >
               새로고침
@@ -1421,6 +1552,14 @@ export default function MoodBoard() {
               value={model.fear.toString()}
               caption="손절·폭락·반대매매"
               tone="fear"
+            />
+          </div>
+
+          <div className="order-3">
+            <MarketContextPanel
+              indicators={marketIndicators}
+              error={marketContextError}
+              fetchedAt={marketContextFetchedAt}
             />
           </div>
 

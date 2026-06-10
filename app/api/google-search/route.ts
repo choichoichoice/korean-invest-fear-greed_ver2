@@ -56,8 +56,8 @@ const GOOGLE_QUERIES = [
   {
     id: "google-stocks",
     label: "관심종목 웹 언급",
-    query: '("삼성전자" OR "SK하이닉스" OR "현대차") 주식',
-    sample: "삼성전자 · SK하이닉스 · 현대차",
+    query: '("삼성전자" OR "SK하이닉스") 주식',
+    sample: "삼성전자 · SK하이닉스",
   },
 ];
 

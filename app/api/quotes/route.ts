@@ -55,7 +55,7 @@ type NaverQuote = {
   };
 };
 
-const STOCK_CODES = ["005930", "000660", "005380"];
+const STOCK_CODES = ["005930", "000660"];
 const NAVER_ENDPOINT = `https://polling.finance.naver.com/api/realtime/domestic/stock/${STOCK_CODES.join(",")}`;
 
 export const dynamic = "force-dynamic";
