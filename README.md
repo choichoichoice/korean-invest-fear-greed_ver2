@@ -17,14 +17,16 @@ npm run build
 
 ## Environment Variables
 
-네이버 데이터랩 검색 트렌드를 실데이터로 연결하려면 `.env.local`에 다음 값을 넣습니다.
+네이버 데이터랩 검색 트렌드와 무료 언급 레이더를 실데이터로 연결하려면 `.env.local`에 다음 값을 넣습니다.
 
 ```bash
 NAVER_DATALAB_CLIENT_ID=...
 NAVER_DATALAB_CLIENT_SECRET=...
 ```
 
-두 값은 네이버 개발자센터에서 데이터랩 검색어트렌드 API를 사용하도록 등록한 애플리케이션의 Client ID와 Client Secret입니다. 저장소에는 실제 키를 커밋하지 않습니다.
+두 값은 네이버 개발자센터에서 데이터랩 검색어트렌드 API와 검색 API를 사용하도록 등록한 애플리케이션의 Client ID와 Client Secret입니다. 저장소에는 실제 키를 커밋하지 않습니다.
+
+무료 언급 레이더는 X API를 쓰지 않고 네이버 검색 API의 뉴스, 블로그, 카페글 공개 검색 결과를 합산합니다. 한 번 갱신에 36회 호출하며, 개인용 사용량에서는 네이버 검색 API 일일 한도 안에서 동작하도록 설계했습니다.
 
 Google 웹 언급량 프록시를 연결하려면 Google Custom Search JSON API용 값도 추가합니다.
 

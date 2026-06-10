@@ -75,6 +75,38 @@ type GoogleSearchResponse = {
   error?: string;
 };
 
+type NaverMentionSignal = {
+  id: string;
+  label: string;
+  value: string;
+  baseline: string;
+  score: number;
+  pulse: string;
+  sample: string;
+  tone: SignalTone;
+  sourceTotals: {
+    source: string;
+    label: string;
+    total: number;
+  }[];
+  topLinks: {
+    title: string;
+    link: string;
+    source: string;
+  }[];
+};
+
+type NaverMentionsResponse = {
+  configured?: boolean;
+  fetchedAt?: string;
+  latencyMs?: number;
+  dailyCallBudget?: number;
+  estimatedCallsPerRefresh?: number;
+  signals?: NaverMentionSignal[];
+  message?: string;
+  error?: string;
+};
+
 type SignalTone = "hot" | "calm" | "fear" | "risk" | "neutral";
 
 type PsychologySignal = {
@@ -107,6 +139,7 @@ type ScorePoint = {
 
 const MODEL_REFRESH_MS = 15000;
 const SEARCH_REFRESH_MS = 60 * 60 * 1000;
+const FREE_MENTION_REFRESH_MS = 60 * 60 * 1000;
 const SCORE_HISTORY_KEY = "kfg:score-history:v1";
 const SCORE_HISTORY_WINDOW_MS = 48 * 60 * 60 * 1000;
 const SCORE_HISTORY_MIN_GAP_MS = 10 * 60 * 1000;
@@ -225,9 +258,15 @@ const semiconductorOntology: OntologyLayer[] = [
   },
 ];
 
-function buildSourceRows(trendConfigured: boolean | null, googleConfigured: boolean | null) {
+function buildSourceRows(
+  trendConfigured: boolean | null,
+  googleConfigured: boolean | null,
+  naverMentionConfigured: boolean | null,
+) {
   const searchStatus = trendConfigured === true ? "연결됨" : trendConfigured === false ? "키 설정 필요" : "확인중";
   const googleStatus = googleConfigured === true ? "연결됨" : googleConfigured === false ? "키 설정 필요" : "수동 OFF";
+  const mentionStatus =
+    naverMentionConfigured === true ? "연결됨" : naverMentionConfigured === false ? "키 설정 필요" : "확인중";
 
   return [
   {
@@ -241,6 +280,12 @@ function buildSourceRows(trendConfigured: boolean | null, googleConfigured: bool
     path: "현재: 네이버 데이터랩",
     role: "FOMO·공포·탐욕·빚투·반도체 사이클 검색 비율",
     status: searchStatus,
+  },
+  {
+    source: "무료 언급",
+    path: "현재: 네이버 검색 API",
+    role: "뉴스·블로그·카페글에서 FOMO·공포·반도체 공개 언급 압력",
+    status: mentionStatus,
   },
   {
     source: "웹 언급",
@@ -282,6 +327,10 @@ function formatTimestamp(value?: string | null) {
 function formatSignedRate(value: number) {
   const sign = value > 0 ? "+" : "";
   return `${sign}${value.toFixed(2)}%`;
+}
+
+function formatCount(value: number) {
+  return new Intl.NumberFormat("ko-KR").format(value);
 }
 
 function formatCompactTime(value: number) {
@@ -729,6 +778,111 @@ function SearchTrendPanel({
   );
 }
 
+function FreeMentionPanel({
+  configured,
+  signals,
+  error,
+  fetchedAt,
+  dailyCallBudget,
+  estimatedCallsPerRefresh,
+}: {
+  configured: boolean | null;
+  signals: NaverMentionSignal[];
+  error: string | null;
+  fetchedAt: string | null;
+  dailyCallBudget: number | null;
+  estimatedCallsPerRefresh: number | null;
+}) {
+  const statusText =
+    configured === true ? `무료 신호 ${formatTimestamp(fetchedAt)}` : configured === false ? "키 2개 필요" : "확인중";
+  const budgetText =
+    dailyCallBudget && estimatedCallsPerRefresh
+      ? `갱신 ${estimatedCallsPerRefresh}회 / 일 한도 ${formatCount(dailyCallBudget)}회`
+      : "네이버 검색 API";
+
+  return (
+    <article className="min-w-0 rounded-lg border border-[#d9dee7] bg-white p-5 shadow-sm">
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <div>
+          <h2 className="text-lg font-semibold text-[#171a1f]">무료 언급 레이더</h2>
+          <p className="mt-1 text-sm text-[#687080]">
+            뉴스·블로그·카페글의 공개 검색량으로 X 없이 심리 압력을 봅니다.
+          </p>
+        </div>
+        <div className="flex flex-wrap items-center gap-2">
+          <span className="rounded-md border border-[#bfe8ca] bg-[#eef8f1] px-3 py-2 text-xs font-semibold text-[#246b45]">
+            비용 0원
+          </span>
+          <span className="rounded-md border border-[#d9dee7] bg-[#f7f8fa] px-3 py-2 text-xs font-semibold text-[#4f5867]">
+            {statusText}
+          </span>
+        </div>
+      </div>
+
+      <p className="mt-3 text-xs text-[#687080]">{budgetText}</p>
+
+      {error ? (
+        <div className="mt-4 rounded-lg border border-[#e0ae35] bg-[#fff8e6] px-4 py-3 text-sm text-[#6e4b00]">
+          {error}
+        </div>
+      ) : null}
+
+      {signals.length > 0 ? (
+        <div className="mt-5 grid gap-4">
+          {signals.map((signal) => {
+            const colors = toneClasses(signal.tone);
+
+            return (
+              <div
+                key={signal.id}
+                className="grid gap-3 border-t border-[#edf0f4] pt-4 first:border-t-0 first:pt-0 md:grid-cols-[minmax(0,1fr)_115px_145px] md:items-center"
+              >
+                <div className="min-w-0">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <p className="font-semibold text-[#171a1f]">{signal.label}</p>
+                    <span className={`${colors.bg} ${colors.text} rounded-md px-2 py-1 text-xs font-semibold`}>
+                      {signal.pulse}
+                    </span>
+                  </div>
+                  <p className="mt-1 text-sm text-[#687080]">{signal.sample}</p>
+                  {signal.topLinks.length > 0 ? (
+                    <a
+                      href={signal.topLinks[0].link}
+                      target="_blank"
+                      rel="noreferrer"
+                      className="mt-2 block truncate text-xs font-medium text-[#1f64d8] hover:underline"
+                    >
+                      {signal.topLinks[0].source} · {signal.topLinks[0].title}
+                    </a>
+                  ) : null}
+                </div>
+                <div>
+                  <p className={`font-mono text-2xl font-semibold ${colors.text}`}>{signal.value}</p>
+                  <p className="mt-1 text-xs text-[#687080]">{signal.baseline}</p>
+                </div>
+                <div>
+                  <ScoreBar score={signal.score} tone={signal.tone} />
+                  <div className="mt-2 flex flex-wrap gap-1 text-[11px] text-[#687080]">
+                    {signal.sourceTotals.map((source) => (
+                      <span key={`${signal.id}-${source.source}`}>
+                        {source.label} {formatCount(source.total)}
+                      </span>
+                    ))}
+                  </div>
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      ) : (
+        <div className="mt-4 rounded-lg border border-[#d9dee7] bg-[#f7f8fa] px-4 py-3 text-sm text-[#555f70]">
+          네이버 검색 API가 연결되면 X 없이도 공개 언급량 신호가 채워집니다.
+        </div>
+      )}
+    </article>
+  );
+}
+
 function PsychologyPulsePanel() {
   return (
     <article className="min-w-0 rounded-lg border border-[#d9dee7] bg-white p-5 shadow-sm">
@@ -995,6 +1149,12 @@ export default function MoodBoard() {
   const [trendConfigured, setTrendConfigured] = useState<boolean | null>(null);
   const [trendFetchedAt, setTrendFetchedAt] = useState<string | null>(null);
   const [trendError, setTrendError] = useState<string | null>(null);
+  const [naverMentionSignals, setNaverMentionSignals] = useState<NaverMentionSignal[]>([]);
+  const [naverMentionConfigured, setNaverMentionConfigured] = useState<boolean | null>(null);
+  const [naverMentionFetchedAt, setNaverMentionFetchedAt] = useState<string | null>(null);
+  const [naverMentionError, setNaverMentionError] = useState<string | null>(null);
+  const [naverMentionDailyBudget, setNaverMentionDailyBudget] = useState<number | null>(null);
+  const [naverMentionCallsPerRefresh, setNaverMentionCallsPerRefresh] = useState<number | null>(null);
   const [googleSignals, setGoogleSignals] = useState<GoogleMentionSignal[]>([]);
   const [googleConfigured, setGoogleConfigured] = useState<boolean | null>(null);
   const [googleFetchedAt, setGoogleFetchedAt] = useState<string | null>(null);
@@ -1045,6 +1205,27 @@ export default function MoodBoard() {
     }
   }, []);
 
+  const loadNaverMentions = useCallback(async () => {
+    try {
+      const response = await fetch(`/api/naver-mentions?ts=${Date.now()}`, { cache: "no-store" });
+      const payload = (await response.json()) as NaverMentionsResponse;
+
+      setNaverMentionConfigured(payload.configured ?? false);
+      setNaverMentionSignals(payload.signals ?? []);
+      setNaverMentionFetchedAt(payload.fetchedAt ?? new Date().toISOString());
+      setNaverMentionDailyBudget(payload.dailyCallBudget ?? null);
+      setNaverMentionCallsPerRefresh(payload.estimatedCallsPerRefresh ?? null);
+
+      if (!response.ok || payload.error) {
+        throw new Error(payload.error ?? "무료 언급 데이터를 불러오지 못했습니다.");
+      }
+
+      setNaverMentionError(payload.configured === false ? "Client ID와 Client Secret이 모두 필요합니다." : null);
+    } catch (fetchError) {
+      setNaverMentionError(fetchError instanceof Error ? fetchError.message : "무료 언급 데이터를 불러오지 못했습니다.");
+    }
+  }, []);
+
   const loadGoogleSearch = useCallback(async () => {
     setGoogleLoading(true);
     try {
@@ -1071,11 +1252,12 @@ export default function MoodBoard() {
     const initialLoad = window.setTimeout(() => {
       void loadQuotes();
       void loadTrends();
+      void loadNaverMentions();
       setScoreHistory(readScoreHistory());
     }, 0);
 
     return () => window.clearTimeout(initialLoad);
-  }, [loadQuotes, loadTrends]);
+  }, [loadNaverMentions, loadQuotes, loadTrends]);
 
   useEffect(() => {
     const timer = window.setInterval(() => {
@@ -1097,8 +1279,21 @@ export default function MoodBoard() {
     return () => window.clearInterval(timer);
   }, [loadTrends]);
 
+  useEffect(() => {
+    const timer = window.setInterval(() => {
+      if (document.visibilityState === "visible") {
+        void loadNaverMentions();
+      }
+    }, FREE_MENTION_REFRESH_MS);
+
+    return () => window.clearInterval(timer);
+  }, [loadNaverMentions]);
+
   const model = useMemo(() => buildModel(quotes), [quotes]);
-  const dataSourceRows = useMemo(() => buildSourceRows(trendConfigured, googleConfigured), [googleConfigured, trendConfigured]);
+  const dataSourceRows = useMemo(
+    () => buildSourceRows(trendConfigured, googleConfigured, naverMentionConfigured),
+    [googleConfigured, naverMentionConfigured, trendConfigured],
+  );
   const currentScorePoint = useMemo<ScorePoint>(
     () => ({
       t: fetchedAt ? new Date(fetchedAt).getTime() : 0,
@@ -1236,6 +1431,17 @@ export default function MoodBoard() {
             <QuoteStrip quotes={quotes} />
           </section>
         </div>
+      </section>
+
+      <section className="mx-auto w-full max-w-7xl px-4 pb-6 sm:px-6">
+        <FreeMentionPanel
+          configured={naverMentionConfigured}
+          signals={naverMentionSignals}
+          error={naverMentionError}
+          fetchedAt={naverMentionFetchedAt}
+          dailyCallBudget={naverMentionDailyBudget}
+          estimatedCallsPerRefresh={naverMentionCallsPerRefresh}
+        />
       </section>
 
       <section className="mx-auto grid w-full max-w-7xl gap-5 px-4 pb-6 sm:px-6 lg:grid-cols-[0.95fr_1.35fr]">
