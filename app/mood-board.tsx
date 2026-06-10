@@ -15,6 +15,7 @@ type Quote = {
   direction: Direction;
   rangeRate?: number | null;
   rangeRateText: string;
+  volume?: number | null;
   volumeText: string;
   valueText: string;
   marketStatusLabel: string;
@@ -161,14 +162,67 @@ type ScorePoint = {
   fear: number;
 };
 
+type CandlePoint = {
+  t: number;
+  close: number;
+  volume?: number | null;
+};
+
+type FearAxisRow = {
+  label: string;
+  detail: string;
+  score: number | null;
+  weight: number;
+};
+
+type FearAxis = {
+  score: number | null;
+  rows: FearAxisRow[];
+};
+
+type CandleSeries = {
+  code: string;
+  name: string;
+  symbol: string;
+  currency: string;
+  points: CandlePoint[];
+};
+
+type CandlesResponse = {
+  source?: string;
+  fetchedAt?: string;
+  error?: string;
+  series?: CandleSeries[];
+};
+
 const MODEL_REFRESH_MS = 15000;
 const MARKET_CONTEXT_REFRESH_MS = 60 * 1000;
 const SEARCH_REFRESH_MS = 60 * 60 * 1000;
 const FREE_MENTION_REFRESH_MS = 60 * 60 * 1000;
+const CANDLES_REFRESH_MS = 10 * 60 * 1000;
 const SCORE_HISTORY_KEY = "kfg:score-history:v1";
-const SCORE_HISTORY_WINDOW_MS = 48 * 60 * 60 * 1000;
+const SCORE_HISTORY_WINDOW_MS = 14 * 24 * 60 * 60 * 1000;
 const SCORE_HISTORY_MIN_GAP_MS = 10 * 60 * 1000;
-const SCORE_HISTORY_MAX_POINTS = 288;
+const SCORE_HISTORY_MAX_POINTS = 2016;
+
+const SCORE_HISTORY_RANGES = [
+  { label: "48시간", ms: 48 * 60 * 60 * 1000 },
+  { label: "7일", ms: 7 * 24 * 60 * 60 * 1000 },
+  { label: "14일", ms: 14 * 24 * 60 * 60 * 1000 },
+] as const;
+
+const CANDLE_RANGES = [
+  { label: "1개월", days: 31 },
+  { label: "3개월", days: 92 },
+  { label: "6개월", days: 186 },
+  { label: "1년", days: 366 },
+  { label: "5년", days: 1860 },
+] as const;
+
+const REBOUND_THRESHOLDS = [3, 5] as const;
+const REBOUND_HORIZON_DAYS = 5;
+// 코스피가 40년 박스권(고점 ~3,300)을 처음 넘어선 지점을 레짐 전환점으로 사용.
+const KOSPI_BOX_CEILING = 3400;
 
 const dateFormatter = new Intl.DateTimeFormat("ko-KR", {
   timeZone: "Asia/Seoul",
@@ -403,6 +457,17 @@ function saveScoreHistory(points: ScorePoint[]) {
   }
 }
 
+function mergeScoreHistories(left: ScorePoint[], right: ScorePoint[]) {
+  const byTime = new Map<number, ScorePoint>();
+  for (const point of [...left, ...right]) {
+    if (Number.isFinite(point.t) && Number.isFinite(point.score)) {
+      byTime.set(point.t, point);
+    }
+  }
+
+  return [...byTime.values()].sort((a, b) => a.t - b.t).slice(-SCORE_HISTORY_MAX_POINTS);
+}
+
 function appendScorePoint(points: ScorePoint[], nextPoint: ScorePoint) {
   const cutoff = nextPoint.t - SCORE_HISTORY_WINDOW_MS;
   const trimmed = points.filter((point) => point.t >= cutoff).sort((left, right) => left.t - right.t);
@@ -558,6 +623,313 @@ function buildModel(quotes: Quote[]) {
   };
 }
 
+function parsePulsePercent(pulse: string): number | null {
+  const match = pulse.match(/([+-]?\d+(?:\.\d+)?)\s*%/);
+  if (!match) return null;
+  const parsed = Number(match[1]);
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
+function pulseToScore(percent: number | null): number | null {
+  if (percent === null) return null;
+  return Math.round(clamp(50 + percent * 0.5));
+}
+
+function computeVolumeRatios(quotes: Quote[], candleSeries: CandleSeries[]) {
+  const ratios: { name: string; ratio: number }[] = [];
+  const todayStart = new Date(new Date().toLocaleDateString("en-US", { timeZone: "Asia/Seoul" })).getTime();
+
+  for (const series of candleSeries) {
+    const quote = quotes.find((entry) => entry.code === series.code);
+    const liveVolume = quote?.volume ?? null;
+    const baselineVolumes = series.points
+      .filter((point) => point.t < todayStart)
+      .map((point) => point.volume)
+      .filter((volume): volume is number => typeof volume === "number" && volume > 0)
+      .slice(-20);
+
+    if (liveVolume === null || liveVolume <= 0 || baselineVolumes.length < 5) continue;
+
+    const baseline = average(baselineVolumes);
+    if (baseline <= 0) continue;
+
+    ratios.push({ name: series.name, ratio: liveVolume / baseline });
+  }
+
+  return ratios;
+}
+
+function weightedAxisScore(rows: FearAxisRow[]): number | null {
+  const active = rows.filter((row) => row.score !== null);
+  if (active.length === 0) return null;
+
+  const totalWeight = active.reduce((sum, row) => sum + row.weight, 0);
+  if (totalWeight <= 0) return null;
+
+  const weighted = active.reduce((sum, row) => sum + (row.score as number) * row.weight, 0);
+  return Math.round(weighted / totalWeight);
+}
+
+function buildDualFear(
+  trendSignals: TrendSignal[],
+  mentionSignals: NaverMentionSignal[],
+  quotes: Quote[],
+  candleSeries: CandleSeries[],
+  avgChange: number,
+): { upside: FearAxis; downside: FearAxis } {
+  const trendById = new Map(trendSignals.map((signal) => [signal.id, signal]));
+  const mentionById = new Map(mentionSignals.map((signal) => [signal.id, signal]));
+
+  const fomoTrend = trendById.get("search-FOMO") ?? null;
+  const fearTrend = trendById.get("search-공포") ?? null;
+  const leverageTrend = trendById.get("search-빚투") ?? null;
+  const fomoMention = mentionById.get("free-fomo") ?? null;
+  const fearMention = mentionById.get("free-fear") ?? null;
+
+  const volumeRatios = computeVolumeRatios(quotes, candleSeries);
+  const avgVolumeRatio = volumeRatios.length > 0 ? average(volumeRatios.map((entry) => entry.ratio)) : null;
+  const volumeDetail =
+    volumeRatios.length > 0
+      ? volumeRatios.map((entry) => `${entry.name} ${entry.ratio.toFixed(1)}x`).join(" · ")
+      : "거래량 대기";
+
+  const upsideRows: FearAxisRow[] = [
+    {
+      label: "진입 질문 검색 가속",
+      detail: fomoTrend ? `${fomoTrend.pulse} vs 14일 평균 · ${fomoTrend.sample.split("·")[0].trim()} 등` : "데이터랩 대기",
+      score: fomoTrend ? pulseToScore(parsePulsePercent(fomoTrend.pulse)) : null,
+      weight: 0.45,
+    },
+    {
+      label: "진입 질문 언급 압력",
+      detail: fomoMention ? `${fomoMention.value} 건 · ${fomoMention.sample}` : "언급 레이더 대기",
+      score: fomoMention ? fomoMention.score : null,
+      weight: 0.25,
+    },
+    {
+      label: "거래량 (20일 평균 대비)",
+      detail: volumeDetail,
+      score: avgVolumeRatio !== null ? Math.round(clamp(avgVolumeRatio * 50)) : null,
+      weight: 0.3,
+    },
+  ];
+
+  const downsideRows: FearAxisRow[] = [
+    {
+      label: "공포 검색 가속",
+      detail: fearTrend ? `${fearTrend.pulse} vs 14일 평균 · ${fearTrend.sample.split("·")[0].trim()} 등` : "데이터랩 대기",
+      score: fearTrend ? pulseToScore(parsePulsePercent(fearTrend.pulse)) : null,
+      weight: 0.35,
+    },
+    {
+      label: "빚투·반대매매 검색",
+      detail: leverageTrend ? `${leverageTrend.pulse} vs 14일 평균 · ${leverageTrend.sample.split("·")[0].trim()} 등` : "데이터랩 대기",
+      score: leverageTrend ? pulseToScore(parsePulsePercent(leverageTrend.pulse)) : null,
+      weight: 0.25,
+    },
+    {
+      label: "공포 언급 압력",
+      detail: fearMention ? `${fearMention.value} 건 · ${fearMention.sample}` : "언급 레이더 대기",
+      score: fearMention ? fearMention.score : null,
+      weight: 0.2,
+    },
+    {
+      label: "가격 낙폭",
+      detail: quotes.length > 0 ? `관심종목 평균 ${formatSignedRate(avgChange)}` : "가격 대기",
+      score: quotes.length > 0 ? Math.round(clamp(50 + Math.max(0, -avgChange) * 10 - Math.max(0, avgChange) * 6)) : null,
+      weight: 0.2,
+    },
+  ];
+
+  return {
+    upside: { score: weightedAxisScore(upsideRows), rows: upsideRows },
+    downside: { score: weightedAxisScore(downsideRows), rows: downsideRows },
+  };
+}
+
+function dualFearReading(upside: number | null, downside: number | null) {
+  if (upside === null || downside === null) {
+    return { title: "데이터 수집 중", body: "두 축을 계산할 신호가 아직 부족합니다.", tone: "neutral" as SignalTone };
+  }
+
+  if (upside >= 65 && downside >= 65) {
+    return {
+      title: "양쪽 공포 동시 과열",
+      body: "신규 유입과 투매가 부딪히는 변동성 극대 구간. 급락-급반등이 한 세션 안에서 나올 수 있습니다.",
+      tone: "risk" as SignalTone,
+    };
+  }
+
+  if (upside - downside >= 10) {
+    return {
+      title: "상승공포 우세",
+      body: "'이거 살까요?' 질문과 거래량이 가격을 쫓는 구간. 신규 참여자 유입이 추세 연료입니다.",
+      tone: "hot" as SignalTone,
+    };
+  }
+
+  if (downside - upside >= 10) {
+    return {
+      title: "하락공포 우세",
+      body: "투매·청산 압력이 지배하는 구간. 사람들이 하락의 '이유'를 찾기 시작하면 바닥 탐색이 가까워집니다.",
+      tone: "fear" as SignalTone,
+    };
+  }
+
+  return {
+    title: "양축 균형",
+    body: "상승공포와 하락공포가 비슷한 강도. 뚜렷한 쏠림 없이 재료를 기다리는 구간입니다.",
+    tone: "calm" as SignalTone,
+  };
+}
+
+type ReboundStat = {
+  thresholdPct: number;
+  eventCount: number;
+  measurableCount: number;
+  winRate: number | null;
+  avgForward: number | null;
+  medianForward: number | null;
+  worstForward: number | null;
+  bestForward: number | null;
+  lastEventT: number | null;
+};
+
+type ReboundReport = {
+  code: string;
+  name: string;
+  tradingDays: number;
+  todayReturn: number | null;
+  todayReturnT: number | null;
+  todayIsEvent: boolean;
+  stats: ReboundStat[];
+};
+
+function median(values: number[]) {
+  if (values.length === 0) return null;
+  const sorted = [...values].sort((left, right) => left - right);
+  const mid = Math.floor(sorted.length / 2);
+  return sorted.length % 2 === 0 ? (sorted[mid - 1] + sorted[mid]) / 2 : sorted[mid];
+}
+
+function analyzeRebounds(series: CandleSeries, horizonDays = REBOUND_HORIZON_DAYS): ReboundReport {
+  const points = series.points;
+  const dailyReturns: { index: number; t: number; pct: number }[] = [];
+
+  for (let index = 1; index < points.length; index += 1) {
+    const previous = points[index - 1].close;
+    if (previous <= 0) continue;
+    dailyReturns.push({
+      index,
+      t: points[index].t,
+      pct: ((points[index].close - previous) / previous) * 100,
+    });
+  }
+
+  const today = dailyReturns.at(-1) ?? null;
+
+  const stats = REBOUND_THRESHOLDS.map((thresholdPct) => {
+    const events = dailyReturns.filter((entry) => entry.pct <= -thresholdPct);
+    const forwards: number[] = [];
+
+    for (const event of events) {
+      const exitIndex = event.index + horizonDays;
+      if (exitIndex >= points.length) continue;
+      const entryClose = points[event.index].close;
+      if (entryClose <= 0) continue;
+      forwards.push(((points[exitIndex].close - entryClose) / entryClose) * 100);
+    }
+
+    return {
+      thresholdPct,
+      eventCount: events.length,
+      measurableCount: forwards.length,
+      winRate: forwards.length > 0 ? (forwards.filter((value) => value > 0).length / forwards.length) * 100 : null,
+      avgForward: forwards.length > 0 ? average(forwards) : null,
+      medianForward: median(forwards),
+      worstForward: forwards.length > 0 ? Math.min(...forwards) : null,
+      bestForward: forwards.length > 0 ? Math.max(...forwards) : null,
+      lastEventT: events.at(-1)?.t ?? null,
+    };
+  });
+
+  return {
+    code: series.code,
+    name: series.name,
+    tradingDays: points.length,
+    todayReturn: today?.pct ?? null,
+    todayReturnT: today?.t ?? null,
+    todayIsEvent: today !== null && today.pct <= -REBOUND_THRESHOLDS[0],
+    stats,
+  };
+}
+
+function findBreakoutT(kospi: CandleSeries | undefined): number | null {
+  if (!kospi) return null;
+
+  let seenBelow = false;
+  for (const point of kospi.points) {
+    if (point.close < KOSPI_BOX_CEILING) {
+      seenBelow = true;
+    } else if (seenBelow) {
+      return point.t;
+    }
+  }
+
+  return null;
+}
+
+type RegimeStat = {
+  count: number;
+  measurable: number;
+  winRate: number | null;
+  avgForward: number | null;
+};
+
+type RegimeComparison = {
+  code: string;
+  name: string;
+  box: RegimeStat;
+  breakout: RegimeStat;
+};
+
+function compareRegimes(
+  series: CandleSeries,
+  splitT: number,
+  thresholdPct: number = REBOUND_THRESHOLDS[0],
+  horizonDays = REBOUND_HORIZON_DAYS,
+): RegimeComparison {
+  const points = series.points;
+  const buckets = { box: [] as number[], breakout: [] as number[] };
+  const counts = { box: 0, breakout: 0 };
+
+  for (let index = 1; index < points.length; index += 1) {
+    const previous = points[index - 1].close;
+    if (previous <= 0) continue;
+    const pct = ((points[index].close - previous) / previous) * 100;
+    if (pct > -thresholdPct) continue;
+
+    const regime = points[index].t < splitT ? "box" : "breakout";
+    counts[regime] += 1;
+
+    const exitIndex = index + horizonDays;
+    if (exitIndex >= points.length) continue;
+    buckets[regime].push(((points[exitIndex].close - points[index].close) / points[index].close) * 100);
+  }
+
+  const toStat = (regime: "box" | "breakout"): RegimeStat => {
+    const forwards = buckets[regime];
+    return {
+      count: counts[regime],
+      measurable: forwards.length,
+      winRate: forwards.length > 0 ? (forwards.filter((value) => value > 0).length / forwards.length) * 100 : null,
+      avgForward: forwards.length > 0 ? average(forwards) : null,
+    };
+  };
+
+  return { code: series.code, name: series.name, box: toStat("box"), breakout: toStat("breakout") };
+}
+
 function ScoreBar({ score, tone = "neutral" }: { score: number; tone?: SignalTone }) {
   const colors = toneClasses(tone);
 
@@ -588,19 +960,30 @@ function MoodScale({ score }: { score: number }) {
   );
 }
 
-function ScoreHistoryChart({ points, currentPoint }: { points: ScorePoint[]; currentPoint: ScorePoint }) {
+function ScoreHistoryChart({
+  points,
+  currentPoint,
+  storageLabel,
+}: {
+  points: ScorePoint[];
+  currentPoint: ScorePoint;
+  storageLabel: string;
+}) {
+  const [rangeMs, setRangeMs] = useState<number>(SCORE_HISTORY_RANGES[0].ms);
   const width = 520;
   const height = 156;
   const paddingX = 18;
   const paddingY = 16;
   const plotWidth = width - paddingX * 2;
   const plotHeight = height - paddingY * 2;
-  const hasHistory = points.length > 0;
+  const latestT = points.at(-1)?.t ?? currentPoint.t;
+  const rangedPoints = points.filter((point) => point.t >= latestT - rangeMs);
+  const hasHistory = rangedPoints.length > 0;
   const fallbackPoint: ScorePoint = {
     ...currentPoint,
     t: currentPoint.t > 0 ? currentPoint.t : 0,
   };
-  const chartPoints = hasHistory ? points : [fallbackPoint];
+  const chartPoints = hasHistory ? rangedPoints : [fallbackPoint];
   const minTime = chartPoints.length > 1 ? chartPoints[0].t : 0;
   const maxTime = chartPoints.length > 1 ? chartPoints.at(-1)!.t : 1;
   const timeSpan = Math.max(1, maxTime - minTime);
@@ -630,12 +1013,29 @@ function ScoreHistoryChart({ points, currentPoint }: { points: ScorePoint[]; cur
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div>
           <h2 className="text-sm font-semibold text-[#171a1f]">종합점수 시계열</h2>
-          <p className="mt-1 text-xs text-[#687080]">최근 48시간 · 브라우저 저장</p>
+          <p className="mt-1 text-xs text-[#687080]">최근 14일 보관 · {storageLabel}</p>
         </div>
         <div className="w-full text-left sm:w-auto sm:text-right">
           <p className={`font-mono text-2xl font-semibold ${deltaClass}`}>{deltaText}</p>
           <p className="text-xs text-[#687080]">{hasHistory ? `${chartPoints.length}개 스냅샷` : "스냅샷 대기"}</p>
         </div>
+      </div>
+
+      <div className="mt-3 flex gap-1">
+        {SCORE_HISTORY_RANGES.map((range) => (
+          <button
+            key={range.label}
+            type="button"
+            onClick={() => setRangeMs(range.ms)}
+            className={`rounded-md border px-2.5 py-1 text-xs font-semibold transition ${
+              rangeMs === range.ms
+                ? "border-[#20242b] bg-[#20242b] text-white"
+                : "border-[#d9dee7] bg-white text-[#555f70] hover:border-[#8793a6]"
+            }`}
+          >
+            {range.label}
+          </button>
+        ))}
       </div>
 
       <div className="mt-4 h-[156px] w-full overflow-hidden rounded-md bg-white">
@@ -679,6 +1079,460 @@ function ScoreHistoryChart({ points, currentPoint }: { points: ScorePoint[]; cur
         <span className="shrink-0">현재 {latest.score}</span>
         <span className="min-w-0 truncate text-right">{hasHistory ? formatCompactTime(latest.t) : "-"}</span>
       </div>
+    </section>
+  );
+}
+
+function FearAxisCard({
+  title,
+  subtitle,
+  axis,
+  tone,
+}: {
+  title: string;
+  subtitle: string;
+  axis: FearAxis;
+  tone: SignalTone;
+}) {
+  const colors = toneClasses(tone);
+
+  return (
+    <article className={`min-w-0 rounded-lg border ${colors.border} ${colors.bg} p-4`}>
+      <div className="flex flex-wrap items-start justify-between gap-2">
+        <div>
+          <h3 className="text-sm font-semibold text-[#171a1f]">{title}</h3>
+          <p className="mt-1 text-xs text-[#687080]">{subtitle}</p>
+        </div>
+        <p className={`font-mono text-4xl font-semibold ${colors.text}`}>{axis.score ?? "-"}</p>
+      </div>
+
+      <div className="mt-3">
+        <ScoreBar score={axis.score ?? 0} tone={tone} />
+      </div>
+
+      <ul className="mt-4 grid gap-2.5">
+        {axis.rows.map((row) => (
+          <li key={row.label} className="rounded-md border border-white/70 bg-white/70 px-3 py-2">
+            <div className="flex items-center justify-between gap-2">
+              <p className="text-xs font-semibold text-[#3f4652]">{row.label}</p>
+              <p className="shrink-0 font-mono text-sm font-semibold text-[#20242b]">{row.score ?? "대기"}</p>
+            </div>
+            <p className="mt-1 truncate text-xs text-[#687080]">{row.detail}</p>
+            <div className="mt-1.5">
+              <ScoreBar score={row.score ?? 0} tone={tone} />
+            </div>
+          </li>
+        ))}
+      </ul>
+    </article>
+  );
+}
+
+function DualFearPanel({
+  upside,
+  downside,
+  reboundReports,
+}: {
+  upside: FearAxis;
+  downside: FearAxis;
+  reboundReports: ReboundReport[];
+}) {
+  const reading = dualFearReading(upside.score, downside.score);
+  const readingColors = toneClasses(reading.tone);
+  const eventReports = reboundReports.filter((report) => report.todayIsEvent && report.todayReturn !== null);
+
+  return (
+    <section className="min-w-0 rounded-lg border border-[#d9dee7] bg-white p-5 shadow-sm">
+      <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
+        <div>
+          <h2 className="text-lg font-semibold text-[#171a1f]">공포 양축 게이지</h2>
+          <p className="mt-1 text-xs text-[#687080]">
+            공포는 양방향 — 소외될 공포(신규 유입)와 잃을 공포(투매)를 따로 잽니다
+          </p>
+        </div>
+        <span className={`rounded-md border ${readingColors.border} ${readingColors.bg} px-3 py-2 text-sm font-semibold ${readingColors.text}`}>
+          {reading.title}
+        </span>
+      </div>
+
+      <div className="grid gap-3 lg:grid-cols-2">
+        <FearAxisCard
+          title="상승공포 · 신규 유입"
+          subtitle="'이거 살까요?' — 소외 공포가 만드는 매수 압력"
+          axis={upside}
+          tone="hot"
+        />
+        <FearAxisCard
+          title="하락공포 · 투매/청산"
+          subtitle="'얼마나 빠질까?' — 손실 공포가 만드는 매도 압력"
+          axis={downside}
+          tone="fear"
+        />
+      </div>
+
+      <p className="mt-4 rounded-lg border border-[#e5e9ef] bg-[#fbfcfd] px-4 py-3 text-sm leading-6 text-[#3f4652]">
+        {reading.body}
+      </p>
+
+      {eventReports.length > 0 ? (
+        <div className="mt-3 rounded-lg border border-[#fecdd3] bg-[#fff1f2] px-4 py-3">
+          <p className="text-xs font-semibold text-[#b4232c]">급락 이벤트 × 과거 통계</p>
+          <ul className="mt-1.5 grid gap-1 text-sm leading-6 text-[#3f4652]">
+            {eventReports.map((report) => {
+              const stat =
+                (report.todayReturn as number) <= -REBOUND_THRESHOLDS[1] && report.stats[1].measurableCount > 0
+                  ? report.stats[1]
+                  : report.stats[0];
+
+              return (
+                <li key={report.code}>
+                  <span className="font-semibold">{report.name}</span> {formatSignedRate(report.todayReturn as number)} →
+                  과거 하루 -{stat.thresholdPct}% 이하 급락 {stat.measurableCount}회 중{" "}
+                  <span className="font-semibold">
+                    {stat.winRate === null ? "-" : `${Math.round(stat.winRate)}%`}
+                  </span>
+                  가 5거래일 내 반등 (평균 {stat.avgForward === null ? "-" : formatSignedRate(stat.avgForward)})
+                </li>
+              );
+            })}
+          </ul>
+        </div>
+      ) : null}
+    </section>
+  );
+}
+
+function ReboundStatsCard({ report }: { report: ReboundReport }) {
+  const todayClass =
+    report.todayReturn === null
+      ? "text-[#687080]"
+      : report.todayReturn < 0
+        ? "text-[#1d4ed8]"
+        : "text-[#b4232c]";
+
+  return (
+    <article className="min-w-0 rounded-lg border border-[#d9dee7] bg-white p-4 shadow-sm">
+      <div className="flex flex-wrap items-start justify-between gap-2">
+        <div>
+          <h3 className="text-sm font-semibold text-[#171a1f]">{report.name}</h3>
+          <p className="mt-1 text-xs text-[#687080]">{report.tradingDays}거래일 표본</p>
+        </div>
+        <div className="text-right">
+          <p className={`font-mono text-sm font-semibold ${todayClass}`}>
+            {report.todayReturnT === null
+              ? "최근 -"
+              : `${new Intl.DateTimeFormat("ko-KR", { timeZone: "Asia/Seoul", month: "2-digit", day: "2-digit" }).format(new Date(report.todayReturnT))} ${report.todayReturn === null ? "-" : formatSignedRate(report.todayReturn)}`}
+          </p>
+          {report.todayIsEvent ? (
+            <span className="mt-1 inline-block rounded-md border border-[#fecdd3] bg-[#fff1f2] px-2 py-0.5 text-xs font-semibold text-[#b4232c]">
+              급락 이벤트 발생
+            </span>
+          ) : null}
+        </div>
+      </div>
+
+      <div className="mt-3 grid gap-2.5">
+        {report.stats.map((stat) => (
+          <div key={stat.thresholdPct} className="rounded-md border border-[#e5e9ef] bg-[#fbfcfd] px-3 py-2.5">
+            <div className="flex items-center justify-between gap-2">
+              <p className="text-xs font-semibold text-[#3f4652]">하루 -{stat.thresholdPct}% 이하 급락</p>
+              <p className="font-mono text-xs text-[#687080]">{stat.eventCount}회</p>
+            </div>
+            {stat.measurableCount > 0 ? (
+              <>
+                <div className="mt-2 grid grid-cols-3 gap-2 text-center">
+                  <div>
+                    <p className="font-mono text-base font-semibold text-[#111317]">
+                      {stat.winRate === null ? "-" : `${Math.round(stat.winRate)}%`}
+                    </p>
+                    <p className="text-[10px] text-[#687080]">5일 후 상승확률</p>
+                  </div>
+                  <div>
+                    <p
+                      className={`font-mono text-base font-semibold ${
+                        (stat.avgForward ?? 0) >= 0 ? "text-[#b4232c]" : "text-[#1d4ed8]"
+                      }`}
+                    >
+                      {stat.avgForward === null ? "-" : formatSignedRate(stat.avgForward)}
+                    </p>
+                    <p className="text-[10px] text-[#687080]">평균 수익률</p>
+                  </div>
+                  <div>
+                    <p
+                      className={`font-mono text-base font-semibold ${
+                        (stat.medianForward ?? 0) >= 0 ? "text-[#b4232c]" : "text-[#1d4ed8]"
+                      }`}
+                    >
+                      {stat.medianForward === null ? "-" : formatSignedRate(stat.medianForward)}
+                    </p>
+                    <p className="text-[10px] text-[#687080]">중앙값</p>
+                  </div>
+                </div>
+                <p className="mt-2 text-[10px] text-[#8793a6]">
+                  최악 {stat.worstForward === null ? "-" : formatSignedRate(stat.worstForward)} · 최고{" "}
+                  {stat.bestForward === null ? "-" : formatSignedRate(stat.bestForward)} · 측정 {stat.measurableCount}회
+                </p>
+              </>
+            ) : (
+              <p className="mt-2 text-xs text-[#8793a6]">표본 부족 (5일 경과 전이거나 이벤트 없음)</p>
+            )}
+          </div>
+        ))}
+      </div>
+    </article>
+  );
+}
+
+function RegimeCompareTable({ regimes, breakoutT }: { regimes: RegimeComparison[]; breakoutT: number | null }) {
+  if (breakoutT === null || regimes.length === 0) {
+    return (
+      <p className="mt-4 rounded-lg border border-[#e5e9ef] bg-[#fbfcfd] px-4 py-3 text-xs text-[#687080]">
+        레짐 비교 대기 — 코스피가 박스 상단({formatCount(KOSPI_BOX_CEILING)})을 넘는 시점이 표본 안에 있어야 합니다.
+      </p>
+    );
+  }
+
+  const breakoutLabel = new Intl.DateTimeFormat("ko-KR", {
+    timeZone: "Asia/Seoul",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).format(new Date(breakoutT));
+
+  const cell = (stat: RegimeStat) => (
+    <div className="flex flex-col items-end">
+      <span className="font-mono text-sm font-semibold text-[#111317]">
+        {stat.winRate === null ? "-" : `${Math.round(stat.winRate)}%`}
+      </span>
+      <span className="font-mono text-[10px] text-[#687080]">
+        {stat.count}회 · 평균 {stat.avgForward === null ? "-" : formatSignedRate(stat.avgForward)}
+      </span>
+    </div>
+  );
+
+  return (
+    <div className="mt-4 rounded-lg border border-[#e5e9ef] bg-[#fbfcfd] p-4">
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <h3 className="text-sm font-semibold text-[#171a1f]">레짐 비교 — 박스피 vs 탈박스</h3>
+        <p className="text-xs text-[#687080]">
+          전환점: 코스피 {formatCount(KOSPI_BOX_CEILING)} 첫 돌파 ({breakoutLabel}) · 하루 -3% 급락 후 5거래일 상승확률
+        </p>
+      </div>
+      <div className="mt-3 grid gap-2">
+        <div className="grid grid-cols-[minmax(0,1.2fr)_1fr_1fr] items-center gap-2 text-[10px] font-semibold text-[#8793a6]">
+          <span />
+          <span className="text-right">박스피 구간</span>
+          <span className="text-right">탈박스 구간</span>
+        </div>
+        {regimes.map((regime) => (
+          <div
+            key={regime.code}
+            className="grid grid-cols-[minmax(0,1.2fr)_1fr_1fr] items-center gap-2 rounded-md border border-[#e5e9ef] bg-white px-3 py-2"
+          >
+            <span className="text-xs font-semibold text-[#3f4652]">{regime.name}</span>
+            {cell(regime.box)}
+            {cell(regime.breakout)}
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function ReboundStatsPanel({
+  reports,
+  regimes,
+  breakoutT,
+}: {
+  reports: ReboundReport[];
+  regimes: RegimeComparison[];
+  breakoutT: number | null;
+}) {
+  if (reports.length === 0) {
+    return null;
+  }
+
+  return (
+    <section className="min-w-0 rounded-lg border border-[#d9dee7] bg-white p-5 shadow-sm">
+      <div className="mb-4">
+        <h2 className="text-lg font-semibold text-[#171a1f]">급락 후 재상승 통계</h2>
+        <p className="mt-1 text-xs text-[#687080]">
+          가설 검증 — 급락은 추세 종료인가, 패턴의 일부인가. 하루 급락일 종가 매수 시 5거래일 뒤 결과 (최근 5년 일봉)
+        </p>
+      </div>
+
+      <div className="grid gap-3 lg:grid-cols-3">
+        {reports.map((report) => (
+          <ReboundStatsCard key={report.code} report={report} />
+        ))}
+      </div>
+
+      <RegimeCompareTable regimes={regimes} breakoutT={breakoutT} />
+
+      <p className="mt-4 rounded-lg border border-[#e5e9ef] bg-[#fbfcfd] px-4 py-3 text-xs leading-5 text-[#687080]">
+        표본이 적은 구간(특히 -5%)은 통계적 의미가 제한적입니다. 과거 분포는 참고용이며, 레짐이 바뀌면 분포도 바뀝니다.
+      </p>
+    </section>
+  );
+}
+
+function PriceHistoryChart({ series, rangeDays }: { series: CandleSeries; rangeDays: number }) {
+  const width = 520;
+  const height = 170;
+  const paddingX = 18;
+  const paddingY = 18;
+  const plotWidth = width - paddingX * 2;
+  const plotHeight = height - paddingY * 2;
+
+  const lastT = series.points.at(-1)?.t ?? 0;
+  const cutoff = lastT - rangeDays * 24 * 60 * 60 * 1000;
+  const points = series.points.filter((point) => point.t >= cutoff);
+
+  if (points.length < 2) {
+    return (
+      <div className="rounded-lg border border-[#d9dee7] bg-white p-4 text-sm text-[#687080]">
+        {series.name} 캔들 데이터가 부족합니다.
+      </div>
+    );
+  }
+
+  const closes = points.map((point) => point.close);
+  const minClose = Math.min(...closes);
+  const maxClose = Math.max(...closes);
+  const pad = Math.max((maxClose - minClose) * 0.06, maxClose * 0.002);
+  const yMin = minClose - pad;
+  const yMax = maxClose + pad;
+  const ySpan = Math.max(1, yMax - yMin);
+  const minTime = points[0].t;
+  const timeSpan = Math.max(1, lastT - minTime);
+
+  const coordinates = points.map((point) => ({
+    x: paddingX + ((point.t - minTime) / timeSpan) * plotWidth,
+    y: paddingY + (1 - (point.close - yMin) / ySpan) * plotHeight,
+  }));
+  const path = coordinates.map((coordinate, index) => `${index === 0 ? "M" : "L"} ${coordinate.x} ${coordinate.y}`).join(" ");
+  const areaPath = `${path} L ${coordinates.at(-1)!.x} ${height - paddingY} L ${coordinates[0].x} ${height - paddingY} Z`;
+
+  const first = points[0];
+  const latest = points.at(-1)!;
+  const delta = latest.close - first.close;
+  const deltaRate = first.close > 0 ? (delta / first.close) * 100 : 0;
+  const up = delta >= 0;
+  const lineColor = up ? "#d91f3d" : "#1f64d8";
+  const deltaClass = up ? "text-[#b4232c]" : "text-[#1d4ed8]";
+  const gradientId = `priceArea-${series.code}`;
+
+  const gridLevels = [0.25, 0.5, 0.75].map((ratio) => ({
+    y: paddingY + (1 - ratio) * plotHeight,
+    price: yMin + ySpan * ratio,
+  }));
+
+  const dateLabel = new Intl.DateTimeFormat("ko-KR", { timeZone: "Asia/Seoul", month: "2-digit", day: "2-digit" });
+
+  return (
+    <article className="min-w-0 rounded-lg border border-[#d9dee7] bg-white p-4 shadow-sm">
+      <div className="flex flex-wrap items-start justify-between gap-2">
+        <div>
+          <h3 className="text-sm font-semibold text-[#171a1f]">{series.name}</h3>
+          <p className="mt-1 font-mono text-xs text-[#687080]">{series.code} · 일봉 종가</p>
+        </div>
+        <div className="text-right">
+          <p className="font-mono text-xl font-semibold text-[#111317]">{formatCount(latest.close)}</p>
+          <p className={`font-mono text-xs font-semibold ${deltaClass}`}>
+            {up ? "+" : ""}
+            {deltaRate.toFixed(2)}% · {CANDLE_RANGES.find((range) => range.days >= rangeDays)?.label ?? `${rangeDays}일`}
+          </p>
+        </div>
+      </div>
+
+      <div className="mt-3 h-[170px] w-full overflow-hidden rounded-md bg-[#fbfcfd]">
+        <svg viewBox={`0 0 ${width} ${height}`} role="img" aria-label={`${series.name} 종가 그래프`} className="h-full w-full">
+          <defs>
+            <linearGradient id={gradientId} x1="0" x2="0" y1="0" y2="1">
+              <stop offset="0%" stopColor={lineColor} stopOpacity="0.18" />
+              <stop offset="100%" stopColor={lineColor} stopOpacity="0.02" />
+            </linearGradient>
+          </defs>
+          {gridLevels.map((level) => (
+            <g key={level.y}>
+              <line x1={paddingX} x2={width - paddingX} y1={level.y} y2={level.y} stroke="#e5e9ef" strokeWidth="1" />
+              <text x={paddingX} y={level.y - 4} fill="#8793a6" fontSize="10">
+                {formatCount(Math.round(level.price))}
+              </text>
+            </g>
+          ))}
+          <path d={areaPath} fill={`url(#${gradientId})`} />
+          <path d={path} fill="none" stroke={lineColor} strokeLinecap="round" strokeLinejoin="round" strokeWidth="2.5" />
+          <circle cx={coordinates.at(-1)!.x} cy={coordinates.at(-1)!.y} r="3.5" fill={lineColor} />
+        </svg>
+      </div>
+
+      <div className="mt-2 flex items-center justify-between text-xs text-[#687080]">
+        <span>{dateLabel.format(new Date(first.t))}</span>
+        <span>
+          저 {formatCount(minClose)} · 고 {formatCount(maxClose)}
+        </span>
+        <span>{dateLabel.format(new Date(latest.t))}</span>
+      </div>
+    </article>
+  );
+}
+
+function PriceHistoryPanel({
+  series,
+  error,
+  fetchedAt,
+}: {
+  series: CandleSeries[];
+  error: string | null;
+  fetchedAt: string | null;
+}) {
+  const [rangeDays, setRangeDays] = useState<number>(CANDLE_RANGES[1].days);
+
+  return (
+    <section className="min-w-0 rounded-lg border border-[#d9dee7] bg-white p-5 shadow-sm">
+      <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
+        <div>
+          <h2 className="text-lg font-semibold text-[#171a1f]">가격 흐름</h2>
+          <p className="mt-1 text-xs text-[#687080]">
+            코스피 · 삼성전자 · SK하이닉스 일봉 종가 {fetchedAt ? `· ${formatTimestamp(fetchedAt)}` : ""}
+          </p>
+        </div>
+        <div className="flex gap-1">
+          {CANDLE_RANGES.map((range) => (
+            <button
+              key={range.label}
+              type="button"
+              onClick={() => setRangeDays(range.days)}
+              className={`rounded-md border px-2.5 py-1 text-xs font-semibold transition ${
+                rangeDays === range.days
+                  ? "border-[#20242b] bg-[#20242b] text-white"
+                  : "border-[#d9dee7] bg-white text-[#555f70] hover:border-[#8793a6]"
+              }`}
+            >
+              {range.label}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      {error ? (
+        <div className="mb-4 rounded-lg border border-[#e0ae35] bg-[#fff8e6] px-4 py-3 text-sm text-[#6e4b00]">
+          {error}
+        </div>
+      ) : null}
+
+      {series.length === 0 && !error ? (
+        <div className="rounded-lg border border-[#d9dee7] bg-[#fbfcfd] px-4 py-6 text-center text-sm text-[#687080]">
+          일봉 데이터를 불러오는 중입니다.
+        </div>
+      ) : (
+        <div className="grid gap-3 lg:grid-cols-2">
+          {series.map((entry) => (
+            <PriceHistoryChart key={entry.code} series={entry} rangeDays={rangeDays} />
+          ))}
+        </div>
+      )}
     </section>
   );
 }
@@ -1270,6 +2124,10 @@ export default function MoodBoard() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [scoreHistory, setScoreHistory] = useState<ScorePoint[]>([]);
+  const [serverHistoryAvailable, setServerHistoryAvailable] = useState<boolean | null>(null);
+  const [candleSeries, setCandleSeries] = useState<CandleSeries[]>([]);
+  const [candleFetchedAt, setCandleFetchedAt] = useState<string | null>(null);
+  const [candleError, setCandleError] = useState<string | null>(null);
 
   const loadQuotes = useCallback(async () => {
     try {
@@ -1351,6 +2209,42 @@ export default function MoodBoard() {
     }
   }, []);
 
+  const loadCandles = useCallback(async () => {
+    try {
+      const response = await fetch(`/api/candles?ts=${Date.now()}`, { cache: "no-store" });
+      const payload = (await response.json()) as CandlesResponse;
+
+      setCandleSeries(payload.series ?? []);
+      setCandleFetchedAt(payload.fetchedAt ?? new Date().toISOString());
+
+      if (!response.ok || (payload.error && (payload.series ?? []).length === 0)) {
+        throw new Error(payload.error ?? "일봉 데이터를 불러오지 못했습니다.");
+      }
+
+      setCandleError(null);
+    } catch (fetchError) {
+      setCandleError(fetchError instanceof Error ? fetchError.message : "일봉 데이터를 불러오지 못했습니다.");
+    }
+  }, []);
+
+  const loadServerScoreHistory = useCallback(async () => {
+    try {
+      const response = await fetch(`/api/score-history?ts=${Date.now()}`, { cache: "no-store" });
+      const payload = (await response.json()) as { available?: boolean; points?: ScorePoint[] };
+
+      setServerHistoryAvailable(payload.available ?? false);
+
+      if (payload.available && payload.points && payload.points.length > 0) {
+        const serverPoints = payload.points;
+        setScoreHistory((current) =>
+          mergeScoreHistories(current.length > 0 ? current : readScoreHistory(), serverPoints),
+        );
+      }
+    } catch {
+      setServerHistoryAvailable(false);
+    }
+  }, []);
+
   const loadGoogleSearch = useCallback(async () => {
     setGoogleLoading(true);
     try {
@@ -1379,11 +2273,13 @@ export default function MoodBoard() {
       void loadMarketContext();
       void loadTrends();
       void loadNaverMentions();
+      void loadCandles();
       setScoreHistory(readScoreHistory());
+      void loadServerScoreHistory();
     }, 0);
 
     return () => window.clearTimeout(initialLoad);
-  }, [loadMarketContext, loadNaverMentions, loadQuotes, loadTrends]);
+  }, [loadCandles, loadMarketContext, loadNaverMentions, loadQuotes, loadServerScoreHistory, loadTrends]);
 
   useEffect(() => {
     const timer = window.setInterval(() => {
@@ -1425,7 +2321,30 @@ export default function MoodBoard() {
     return () => window.clearInterval(timer);
   }, [loadNaverMentions]);
 
+  useEffect(() => {
+    const timer = window.setInterval(() => {
+      if (document.visibilityState === "visible") {
+        void loadCandles();
+      }
+    }, CANDLES_REFRESH_MS);
+
+    return () => window.clearInterval(timer);
+  }, [loadCandles]);
+
   const model = useMemo(() => buildModel(quotes), [quotes]);
+  const dualFear = useMemo(
+    () => buildDualFear(trendSignals, naverMentionSignals, quotes, candleSeries, model.avgChange),
+    [candleSeries, model.avgChange, naverMentionSignals, quotes, trendSignals],
+  );
+  const reboundReports = useMemo(() => candleSeries.map((entry) => analyzeRebounds(entry)), [candleSeries]);
+  const breakoutT = useMemo(
+    () => findBreakoutT(candleSeries.find((entry) => entry.code === "KOSPI")),
+    [candleSeries],
+  );
+  const regimeComparisons = useMemo(
+    () => (breakoutT === null ? [] : candleSeries.map((entry) => compareRegimes(entry, breakoutT))),
+    [breakoutT, candleSeries],
+  );
   const dataSourceRows = useMemo(
     () => buildSourceRows(trendConfigured, googleConfigured, naverMentionConfigured),
     [googleConfigured, naverMentionConfigured, trendConfigured],
@@ -1465,10 +2384,29 @@ export default function MoodBoard() {
         saveScoreHistory(next);
         return next;
       });
+
+      void fetch("/api/score-history", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          ...nextPoint,
+          upside: dualFear.upside.score,
+          downside: dualFear.downside.score,
+        }),
+      }).catch(() => {});
     }, 0);
 
     return () => window.clearTimeout(timer);
-  }, [fetchedAt, model.composite, model.fear, model.fomo, model.marketHeat, quotes.length]);
+  }, [
+    dualFear.downside.score,
+    dualFear.upside.score,
+    fetchedAt,
+    model.composite,
+    model.fear,
+    model.fomo,
+    model.marketHeat,
+    quotes.length,
+  ]);
 
   return (
     <main className="min-h-screen overflow-x-hidden bg-[#f7f8fa] text-[#171a1f]">
@@ -1524,7 +2462,11 @@ export default function MoodBoard() {
           <div className="mt-5">
             <MoodScale score={model.composite} />
           </div>
-          <ScoreHistoryChart points={scoreHistory} currentPoint={currentScorePoint} />
+          <ScoreHistoryChart
+            points={scoreHistory}
+            currentPoint={currentScorePoint}
+            storageLabel={serverHistoryAvailable === true ? "서버(D1) + 브라우저 저장" : "브라우저 저장"}
+          />
         </article>
 
         <div className="grid min-w-0 gap-5">
@@ -1578,6 +2520,18 @@ export default function MoodBoard() {
             <QuoteStrip quotes={quotes} />
           </section>
         </div>
+      </section>
+
+      <section className="mx-auto w-full max-w-7xl px-4 pb-6 sm:px-6">
+        <DualFearPanel upside={dualFear.upside} downside={dualFear.downside} reboundReports={reboundReports} />
+      </section>
+
+      <section className="mx-auto w-full max-w-7xl px-4 pb-6 sm:px-6">
+        <PriceHistoryPanel series={candleSeries} error={candleError} fetchedAt={candleFetchedAt} />
+      </section>
+
+      <section className="mx-auto w-full max-w-7xl px-4 pb-6 sm:px-6">
+        <ReboundStatsPanel reports={reboundReports} regimes={regimeComparisons} breakoutT={breakoutT} />
       </section>
 
       <section className="mx-auto w-full max-w-7xl px-4 pb-6 sm:px-6">
