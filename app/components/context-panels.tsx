@@ -103,7 +103,7 @@ export function MarketContextPanel({
       <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
         <div>
           <h2 className="text-lg font-semibold text-[#171a1f]">시장 배경</h2>
-          <p className="mt-1 text-sm text-[#687080]">코스피·환율·나스닥·선물만 압축해서 봅니다.</p>
+          <p className="mt-1 text-sm text-[#687080]">코스피·환율·나스닥·선물·변동성만 압축해서 봅니다.</p>
         </div>
         <span className="rounded-md border border-[#d9dee7] bg-[#f7f8fa] px-3 py-2 text-xs font-semibold text-[#4f5867]">
           {statusText}

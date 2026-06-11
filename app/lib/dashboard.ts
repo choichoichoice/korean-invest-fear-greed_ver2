@@ -892,6 +892,61 @@ export type RegimeComparison = {
   breakout: RegimeStat;
 };
 
+// 진짜 KVIX(V-KOSPI200)는 옵션 내재변동성이라 KRX 전용 API가 필요합니다.
+// 기관 방화벽이 증권 API를 차단하는 환경에서도 동작하도록, 이미 확보한
+// 코스피 일봉으로 실현변동성(연율화)을 계산해 대용 지표로 씁니다.
+export function computeRealizedVolSeries(series: CandleSeries | undefined, windowDays = 20) {
+  if (!series || series.points.length < windowDays + 2) return null;
+
+  const points = series.points;
+  const logReturns: { t: number; value: number }[] = [];
+  for (let index = 1; index < points.length; index += 1) {
+    if (points[index - 1].close > 0 && points[index].close > 0) {
+      logReturns.push({ t: points[index].t, value: Math.log(points[index].close / points[index - 1].close) });
+    }
+  }
+
+  const vols: { t: number; vol: number }[] = [];
+  for (let index = windowDays; index <= logReturns.length; index += 1) {
+    const window = logReturns.slice(index - windowDays, index);
+    const mean = window.reduce((sum, entry) => sum + entry.value, 0) / window.length;
+    const variance =
+      window.reduce((sum, entry) => sum + (entry.value - mean) * (entry.value - mean), 0) / (window.length - 1);
+    vols.push({ t: window.at(-1)!.t, vol: Math.sqrt(variance) * Math.sqrt(252) * 100 });
+  }
+
+  return vols.length > 0 ? vols : null;
+}
+
+export function buildVolIndicator(kospi: CandleSeries | undefined): MarketIndicator | null {
+  const vols = computeRealizedVolSeries(kospi);
+  if (!vols) return null;
+
+  const current = vols.at(-1)!;
+  const yearCutoff = current.t - 366 * 24 * 60 * 60 * 1000;
+  const lastYear = vols.filter((entry) => entry.t >= yearCutoff).map((entry) => entry.vol);
+  const avg1y = lastYear.length > 0 ? average(lastYear) : current.vol;
+  const below = lastYear.filter((vol) => vol <= current.vol).length;
+  const percentile = lastYear.length > 0 ? Math.round((below / lastYear.length) * 100) : null;
+  const diff = current.vol - avg1y;
+
+  return {
+    id: "kvix-proxy",
+    label: "K-변동성 (실현)",
+    value: current.vol,
+    valueText: current.vol.toFixed(1),
+    change: diff,
+    changeText: `${diff > 0 ? "+" : ""}${diff.toFixed(1)} vs 1년 평균`,
+    changeRate: percentile,
+    changeRateText: percentile === null ? "-" : `1년 분포 상위 ${100 - percentile}%`,
+    direction: diff > 0.5 ? "up" : diff < -0.5 ? "down" : "flat",
+    statusLabel: "자체 계산",
+    tradedAt: null,
+    source: "derived-from-candles",
+    note: "코스피 20일 실현변동성 연율화 · KVIX 대용",
+  };
+}
+
 export function compareRegimes(
   series: CandleSeries,
   splitT: number,

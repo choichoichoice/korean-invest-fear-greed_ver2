@@ -11,6 +11,7 @@ import {
   buildDualFear,
   buildModel,
   buildSourceRows,
+  buildVolIndicator,
   CANDLES_REFRESH_MS,
   type CandleSeries,
   type CandlesResponse,
@@ -304,6 +305,14 @@ export default function MoodBoard() {
     () => (breakoutT === null ? [] : candleSeries.map((entry) => compareRegimes(entry, breakoutT))),
     [breakoutT, candleSeries],
   );
+  const volIndicator = useMemo(
+    () => buildVolIndicator(candleSeries.find((entry) => entry.code === "KOSPI")),
+    [candleSeries],
+  );
+  const contextIndicators = useMemo(
+    () => (volIndicator ? [...marketIndicators, volIndicator] : marketIndicators),
+    [marketIndicators, volIndicator],
+  );
   const dataSourceRows = useMemo(
     () => buildSourceRows(trendConfigured, googleConfigured, naverMentionConfigured),
     [googleConfigured, naverMentionConfigured, trendConfigured],
@@ -458,7 +467,7 @@ export default function MoodBoard() {
 
           <div className="order-3">
             <MarketContextPanel
-              indicators={marketIndicators}
+              indicators={contextIndicators}
               error={marketContextError}
               fetchedAt={marketContextFetchedAt}
             />
