@@ -11,6 +11,7 @@ import {
   buildDualFear,
   buildModel,
   buildSourceRows,
+  buildStrategyReport,
   buildVolIndicator,
   CANDLES_REFRESH_MS,
   type CandleSeries,
@@ -25,6 +26,7 @@ import {
   type GoogleSearchResponse,
   indexLabel,
   indexTone,
+  KR_SERIES_CODES,
   MARKET_CONTEXT_REFRESH_MS,
   type MarketContextResponse,
   type MarketIndicator,
@@ -58,6 +60,7 @@ import {
   ResearchDrawer,
   SearchTrendPanel,
 } from "./components/context-panels";
+import { StrategyPanel } from "./components/strategy-panel";
 
 export default function MoodBoard() {
   const [quotes, setQuotes] = useState<Quote[]>([]);
@@ -292,19 +295,26 @@ export default function MoodBoard() {
   }, [loadCandles]);
 
   const model = useMemo(() => buildModel(quotes), [quotes]);
-  const dualFear = useMemo(
-    () => buildDualFear(trendSignals, naverMentionSignals, quotes, candleSeries, model.avgChange),
-    [candleSeries, model.avgChange, naverMentionSignals, quotes, trendSignals],
+  // 가격 차트·반등 통계는 국내 시리즈만 사용. 매크로 시리즈(나스닥·브렌트유·원/달러)는
+  // 플레이북 판정 전용입니다.
+  const krCandleSeries = useMemo(
+    () => candleSeries.filter((entry) => KR_SERIES_CODES.includes(entry.code)),
+    [candleSeries],
   );
-  const reboundReports = useMemo(() => candleSeries.map((entry) => analyzeRebounds(entry)), [candleSeries]);
+  const dualFear = useMemo(
+    () => buildDualFear(trendSignals, naverMentionSignals, quotes, krCandleSeries, model.avgChange),
+    [krCandleSeries, model.avgChange, naverMentionSignals, quotes, trendSignals],
+  );
+  const reboundReports = useMemo(() => krCandleSeries.map((entry) => analyzeRebounds(entry)), [krCandleSeries]);
   const breakoutT = useMemo(
     () => findBreakoutT(candleSeries.find((entry) => entry.code === "KOSPI")),
     [candleSeries],
   );
   const regimeComparisons = useMemo(
-    () => (breakoutT === null ? [] : candleSeries.map((entry) => compareRegimes(entry, breakoutT))),
-    [breakoutT, candleSeries],
+    () => (breakoutT === null ? [] : krCandleSeries.map((entry) => compareRegimes(entry, breakoutT))),
+    [breakoutT, krCandleSeries],
   );
+  const strategyReport = useMemo(() => buildStrategyReport(candleSeries), [candleSeries]);
   const volIndicator = useMemo(
     () => buildVolIndicator(candleSeries.find((entry) => entry.code === "KOSPI")),
     [candleSeries],
@@ -491,11 +501,15 @@ export default function MoodBoard() {
       </section>
 
       <section className="mx-auto w-full max-w-7xl px-4 pb-6 sm:px-6">
+        <StrategyPanel report={strategyReport} />
+      </section>
+
+      <section className="mx-auto w-full max-w-7xl px-4 pb-6 sm:px-6">
         <DualFearPanel upside={dualFear.upside} downside={dualFear.downside} reboundReports={reboundReports} />
       </section>
 
       <section className="mx-auto w-full max-w-7xl px-4 pb-6 sm:px-6">
-        <PriceHistoryPanel series={candleSeries} error={candleError} fetchedAt={candleFetchedAt} />
+        <PriceHistoryPanel series={krCandleSeries} error={candleError} fetchedAt={candleFetchedAt} />
       </section>
 
       <section className="mx-auto w-full max-w-7xl px-4 pb-6 sm:px-6">

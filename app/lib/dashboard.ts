@@ -983,3 +983,328 @@ export function compareRegimes(
 
   return { code: series.code, name: series.name, box: toStat("box"), breakout: toStat("breakout") };
 }
+
+// ---------------------------------------------------------------------------
+// 대응매매 플레이북 — 분할 매수 시나리오를 라이브 일봉으로 자동 판정합니다.
+// 가격대·일정·규칙은 본인 시나리오에 맞게 TRADE_PLAN에서 수정하세요.
+
+// 가격 차트·반등 통계 패널에 표시할 국내 시리즈. 나머지(IXIC·BRENT·USDKRW)는
+// 플레이북의 거부권·지정학 모니터 전용입니다.
+export const KR_SERIES_CODES: string[] = ["KOSPI", "005930", "000660"];
+
+function kstT(date: string) {
+  return Date.parse(`${date}T00:00:00+09:00`);
+}
+
+const DAY_MS = 24 * 60 * 60 * 1000;
+
+export const TRADE_PLAN = {
+  code: "000660",
+  name: "SK하이닉스",
+  dcfTarget: 3_000_000,
+  stopClose: 1_825_000,
+  deadlineLabel: "6/24 장마감 전 포지션 완성",
+  deadlineT: kstT("2026-06-25"),
+  // 지정학(이란·중동) 쇼크 판정 임계값: 일봉 기준.
+  geo: { brentShockPct: 4, brentWatchPct: 2.5, fxShockPct: 1.5, fxWatchPct: 0.8 },
+  events: [
+    { label: "코스피200·코스닥150 리밸런싱 · 스페이스X 상장", date: "2026-06-12", endDate: "2026-06-12", kind: "수급" },
+    { label: "BOJ 금리결정", date: "2026-06-15", endDate: "2026-06-16", kind: "정보" },
+    { label: "FOMC 금리결정", date: "2026-06-16", endDate: "2026-06-17", kind: "정보" },
+    { label: "VIX 먼슬리 만기", date: "2026-06-17", endDate: "2026-06-17", kind: "해소" },
+    { label: "미장 세마녀 · 6/19 미장 휴장", date: "2026-06-18", endDate: "2026-06-19", kind: "해소" },
+    { label: "마이크론 어닝 · MSCI 한국 편입 발표", date: "2026-06-25", endDate: "2026-06-25", kind: "카탈리스트" },
+  ],
+} as const;
+
+export type StrategyTriggerState = "armed" | "triggered" | "vetoed" | "expired" | "breached";
+
+export type StrategyTrigger = {
+  id: string;
+  label: string;
+  weightLabel: string;
+  zoneLabel: string;
+  windowLabel: string;
+  condition: string;
+  state: StrategyTriggerState;
+  stateLabel: string;
+  detail: string;
+  tone: SignalTone;
+};
+
+export type StrategyEventItem = {
+  label: string;
+  kind: string;
+  dateLabel: string;
+  t: number;
+  status: "past" | "active" | "upcoming";
+  ddayLabel: string;
+};
+
+export type GeoLevel = "normal" | "watch" | "shock";
+
+export type StrategyReport = {
+  code: string;
+  name: string;
+  lastClose: number;
+  lastT: number;
+  sma20: number;
+  envelopeDev: number;
+  todayDrop: number | null;
+  todayIsDropEvent: boolean;
+  dcfTarget: number;
+  stopClose: number;
+  stopBreached: boolean;
+  upsidePct: number;
+  downsidePct: number;
+  riskReward: number | null;
+  nasdaqDev: number | null;
+  nasdaqVeto: boolean;
+  geoLevel: GeoLevel;
+  geoDetail: string;
+  edge: { eventCount: number; measurable: number; winRate: number; avgForward: number } | null;
+  triggers: StrategyTrigger[];
+  events: StrategyEventItem[];
+  deadlineLabel: string;
+};
+
+export function formatManwon(value: number) {
+  return `${(value / 10000).toLocaleString("ko-KR", { maximumFractionDigits: 1 })}만`;
+}
+
+function lastDailyChange(series: CandleSeries | undefined): { pct: number; t: number } | null {
+  const points = series?.points;
+  if (!points || points.length < 2) return null;
+  const previous = points[points.length - 2].close;
+  if (previous <= 0) return null;
+  return { pct: (points[points.length - 1].close / previous - 1) * 100, t: points[points.length - 1].t };
+}
+
+function trailingSma(points: CandlePoint[], windowDays = 20): number | null {
+  if (points.length < windowDays) return null;
+  return average(points.slice(-windowDays).map((point) => point.close));
+}
+
+const STRATEGY_STATE_LABELS: Record<StrategyTriggerState, { label: string; tone: SignalTone }> = {
+  armed: { label: "대기", tone: "neutral" },
+  triggered: { label: "조건 충족", tone: "calm" },
+  vetoed: { label: "거부권", tone: "risk" },
+  expired: { label: "창구 종료", tone: "neutral" },
+  breached: { label: "시나리오 이탈", tone: "hot" },
+};
+
+function makeTrigger(
+  base: Omit<StrategyTrigger, "state" | "stateLabel" | "detail" | "tone">,
+  state: StrategyTriggerState,
+  detail: string,
+): StrategyTrigger {
+  const meta = STRATEGY_STATE_LABELS[state];
+  return { ...base, state, stateLabel: meta.label, detail, tone: meta.tone };
+}
+
+export function buildStrategyReport(allSeries: CandleSeries[], now = Date.now()): StrategyReport | null {
+  const target = allSeries.find((series) => series.code === TRADE_PLAN.code);
+  if (!target || target.points.length < 25) return null;
+
+  const points = target.points;
+  const last = points[points.length - 1];
+  const sma20 = trailingSma(points);
+  if (sma20 === null || sma20 <= 0) return null;
+
+  const envelopeDev = (last.close / sma20 - 1) * 100;
+  const todayChange = lastDailyChange(target);
+  const todayDrop = todayChange?.pct ?? null;
+  const todayIsDropEvent = todayDrop !== null && todayDrop <= -5;
+
+  const nasdaq = allSeries.find((series) => series.code === "IXIC");
+  const nasdaqSma = nasdaq ? trailingSma(nasdaq.points) : null;
+  const nasdaqLast = nasdaq?.points.at(-1)?.close ?? null;
+  const nasdaqDev = nasdaqSma !== null && nasdaqSma > 0 && nasdaqLast !== null ? (nasdaqLast / nasdaqSma - 1) * 100 : null;
+  const nasdaqVeto = nasdaqDev !== null && nasdaqDev < 0;
+
+  const brent = lastDailyChange(allSeries.find((series) => series.code === "BRENT"));
+  const fx = lastDailyChange(allSeries.find((series) => series.code === "USDKRW"));
+  let geoLevel: GeoLevel = "normal";
+  if ((brent && brent.pct >= TRADE_PLAN.geo.brentShockPct) || (fx && fx.pct >= TRADE_PLAN.geo.fxShockPct)) {
+    geoLevel = "shock";
+  } else if ((brent && brent.pct >= TRADE_PLAN.geo.brentWatchPct) || (fx && fx.pct >= TRADE_PLAN.geo.fxWatchPct)) {
+    geoLevel = "watch";
+  }
+  const geoDetail = [
+    brent ? `브렌트유 일봉 ${formatSignedRate(brent.pct)}` : "브렌트유 대기",
+    fx ? `원/달러 일봉 ${formatSignedRate(fx.pct)}` : "원/달러 대기",
+  ].join(" · ");
+
+  // 탈박스 레짐 한정 -5% 급락 후 5거래일 통계 — 플레이북의 확률적 근거.
+  const breakoutT = findBreakoutT(allSeries.find((series) => series.code === "KOSPI"));
+  let edge: StrategyReport["edge"] = null;
+  if (breakoutT !== null) {
+    const forwards: number[] = [];
+    let eventCount = 0;
+    for (let index = 1; index < points.length; index += 1) {
+      if (points[index].t < breakoutT || points[index - 1].close <= 0) continue;
+      const pct = (points[index].close / points[index - 1].close - 1) * 100;
+      if (pct > -5) continue;
+      eventCount += 1;
+      const exitIndex = index + REBOUND_HORIZON_DAYS;
+      if (exitIndex < points.length && points[index].close > 0) {
+        forwards.push((points[exitIndex].close / points[index].close - 1) * 100);
+      }
+    }
+    if (forwards.length > 0) {
+      edge = {
+        eventCount,
+        measurable: forwards.length,
+        winRate: (forwards.filter((value) => value > 0).length / forwards.length) * 100,
+        avgForward: average(forwards),
+      };
+    }
+  }
+
+  const stopBreached = last.close < TRADE_PLAN.stopClose;
+  const upsidePct = (TRADE_PLAN.dcfTarget / last.close - 1) * 100;
+  const downsidePct = (TRADE_PLAN.stopClose / last.close - 1) * 100;
+  const riskReward = downsidePct < 0 ? upsidePct / -downsidePct : null;
+
+  const priceNow = `현재가 ${formatManwon(last.close)}`;
+  const t1ZoneHigh = 2_050_000;
+  const t1ZoneLow = 1_950_000;
+  const t1End = kstT("2026-06-13");
+  const t2ZoneHigh = 1_950_000;
+  const t2ZoneLow = 1_880_000;
+  const t2Start = kstT("2026-06-15");
+  const t2End = kstT("2026-06-18");
+  const t3Start = kstT("2026-06-18");
+
+  const t1Base = {
+    id: "t1",
+    label: "T1 — 리밸런싱 왜곡",
+    weightLabel: "30%",
+    zoneLabel: `${formatManwon(t1ZoneLow)}~${formatManwon(t1ZoneHigh)}`,
+    windowLabel: "~6/12 종가 동시호가",
+    condition: "패시브 리밸런싱·스페이스X 상장으로 가격이 정보 없이 일그러질 때 매수",
+  };
+  const t2Base = {
+    id: "t2",
+    label: "T2 — 중앙은행 창구",
+    weightLabel: "40%",
+    zoneLabel: `${formatManwon(t2ZoneLow)}~${formatManwon(t2ZoneHigh)}`,
+    windowLabel: "6/15~17 (BOJ→FOMC)",
+    condition: "-5% 일봉 재발생 또는 195만 이하 패닉 플러시 매수",
+  };
+  const t3Base = {
+    id: "t3",
+    label: "T3 — 이벤트 통과 후 잔여 집행",
+    weightLabel: "30%",
+    zoneLabel: `${formatManwon(1_800_000)}~${formatManwon(1_850_000)} 또는 시장가`,
+    windowLabel: "6/18~24 (FOMC·만기 통과 후)",
+    condition: "나스닥 20일선 회복 또는 FOMC 통과 확인 후 집행 — 그 전엔 거부권",
+  };
+  const stopBase = {
+    id: "stop",
+    label: "손절 — 시나리오 무효화",
+    weightLabel: "전량",
+    zoneLabel: `${formatManwon(TRADE_PLAN.stopClose)} 종가 이탈`,
+    windowLabel: "상시",
+    condition: "상승레그(129만→236만)의 50% 되돌림 이탈 시 탈박스 시나리오 재검토",
+  };
+
+  const geoVetoDetail = `지정학 쇼크 감지(${geoDetail}) — 신규 매수 전면 중단`;
+
+  let t1: StrategyTrigger;
+  if (geoLevel === "shock") {
+    t1 = makeTrigger(t1Base, "vetoed", geoVetoDetail);
+  } else if (now >= t1End) {
+    t1 = makeTrigger(t1Base, "expired", "리밸런싱 창구 종료 — 미체결 물량은 T2로 이월");
+  } else if (last.close <= t1ZoneHigh) {
+    t1 = makeTrigger(t1Base, "triggered", `${priceNow} — 매수 구간 진입 (20일선 대비 ${formatSignedRate(envelopeDev)})`);
+  } else {
+    t1 = makeTrigger(
+      t1Base,
+      "armed",
+      `${priceNow} — 구간 상단까지 ${Math.abs((t1ZoneHigh / last.close - 1) * 100).toFixed(2)}% 하락 필요`,
+    );
+  }
+
+  let t2: StrategyTrigger;
+  if (geoLevel === "shock") {
+    t2 = makeTrigger(t2Base, "vetoed", geoVetoDetail);
+  } else if (now < t2Start) {
+    t2 = makeTrigger(t2Base, "armed", `창구 대기 (6/15 개장부터) · ${priceNow}`);
+  } else if (now >= t2End) {
+    t2 = makeTrigger(t2Base, "expired", "BOJ·FOMC 창구 종료 — 미체결 물량은 T3로 이월");
+  } else if (todayIsDropEvent || last.close <= t2ZoneHigh) {
+    const reason = todayIsDropEvent ? `-5% 일봉 발생(${formatSignedRate(todayDrop ?? 0)})` : "가격이 매수 구간 진입";
+    t2 = makeTrigger(t2Base, "triggered", `${reason} · ${priceNow}`);
+  } else {
+    t2 = makeTrigger(t2Base, "armed", `창구 진행 중 — -5% 일봉 또는 ${formatManwon(t2ZoneHigh)} 이하 대기 · ${priceNow}`);
+  }
+
+  let t3: StrategyTrigger;
+  if (geoLevel === "shock") {
+    t3 = makeTrigger(t3Base, "vetoed", geoVetoDetail);
+  } else if (now < t3Start) {
+    t3 = nasdaqVeto
+      ? makeTrigger(
+          t3Base,
+          "vetoed",
+          `나스닥 20일선 ${formatSignedRate(nasdaqDev ?? 0)} 아래 — 회복 또는 FOMC 통과 전 집행 금지`,
+        )
+      : makeTrigger(t3Base, "armed", "나스닥 거부권 해제 — FOMC 통과 대기");
+  } else if (now >= TRADE_PLAN.deadlineT) {
+    t3 = makeTrigger(t3Base, "expired", "데드라인(6/24) 경과 — 마이크론·MSCI(6/25) 전 신규 진입 중단");
+  } else {
+    const nasdaqNote =
+      nasdaqDev === null ? "" : ` · 나스닥 20일선 대비 ${formatSignedRate(nasdaqDev)}`;
+    t3 = makeTrigger(t3Base, "triggered", `집행 창구 열림 (FOMC 통과)${nasdaqNote}`);
+  }
+
+  const stop = stopBreached
+    ? makeTrigger(stopBase, "breached", `${priceNow} — 손절선 이탈. 플레이북 전체 중단, DCF 가정부터 재점검`)
+    : makeTrigger(stopBase, "armed", `${priceNow} — 손절선까지 ${formatSignedRate(downsidePct)}`);
+
+  const events: StrategyEventItem[] = TRADE_PLAN.events.map((event) => {
+    const startT = kstT(event.date);
+    const endT = kstT(event.endDate) + DAY_MS;
+    const status: StrategyEventItem["status"] = now >= endT ? "past" : now >= startT ? "active" : "upcoming";
+    const dday = Math.ceil((startT - now) / DAY_MS);
+    const formatDate = (value: string) => value.slice(5).replace("-", "/");
+    const dateLabel =
+      event.endDate === event.date
+        ? formatDate(event.date)
+        : `${formatDate(event.date)}~${event.endDate.slice(8)}`;
+    return {
+      label: event.label,
+      kind: event.kind,
+      dateLabel,
+      t: startT,
+      status,
+      ddayLabel: status === "past" ? "종료" : status === "active" ? "진행 중" : `D-${dday}`,
+    };
+  });
+
+  return {
+    code: TRADE_PLAN.code,
+    name: TRADE_PLAN.name,
+    lastClose: last.close,
+    lastT: last.t,
+    sma20,
+    envelopeDev,
+    todayDrop,
+    todayIsDropEvent,
+    dcfTarget: TRADE_PLAN.dcfTarget,
+    stopClose: TRADE_PLAN.stopClose,
+    stopBreached,
+    upsidePct,
+    downsidePct,
+    riskReward,
+    nasdaqDev,
+    nasdaqVeto,
+    geoLevel,
+    geoDetail,
+    edge,
+    triggers: [t1, t2, t3, stop],
+    events,
+    deadlineLabel: TRADE_PLAN.deadlineLabel,
+  };
+}

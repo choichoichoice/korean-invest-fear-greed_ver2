@@ -36,6 +36,10 @@ const SYMBOLS = [
   { code: "KOSPI", name: "코스피", symbol: "^KS11" },
   { code: "005930", name: "삼성전자", symbol: "005930.KS" },
   { code: "000660", name: "SK하이닉스", symbol: "000660.KS" },
+  // 아래 3개는 대응매매 플레이북 전용 매크로 신호 (가격 차트 패널에는 표시하지 않음).
+  { code: "IXIC", name: "나스닥 종합", symbol: "^IXIC" },
+  { code: "BRENT", name: "브렌트유", symbol: "BZ=F" },
+  { code: "USDKRW", name: "원/달러", symbol: "KRW=X" },
 ];
 
 const YAHOO_RANGE = "5y";
