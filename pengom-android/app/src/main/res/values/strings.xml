@@ -1,7 +1,4 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <string name="app_name">펭곰이</string>
-    <string name="service_label">펭곰이 스크롤 카운터</string>
-    <string name="service_summary">인스타·유튜브·틱톡에서 넘긴 횟수를 셉니다</string>
-    <string name="service_desc">펭곰이는 인스타그램, 유튜브, 틱톡에서 화면을 넘긴 횟수만 셉니다. 화면에 나오는 글자, 영상, 메시지 내용은 읽거나 저장하거나 보내지 않습니다. 넘긴 횟수는 이 폰 안에만 저장됩니다.</string>
 </resources>

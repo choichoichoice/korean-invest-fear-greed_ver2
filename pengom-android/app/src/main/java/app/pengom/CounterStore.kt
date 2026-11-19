@@ -6,12 +6,18 @@ import org.json.JSONObject
 import java.time.LocalDate
 
 /**
- * 오늘 넘긴 횟수, 아침 약속(예산·이유·개입 지점)을 폰 안에만 저장한다.
- * 날짜가 바뀌면 어제 횟수를 기록(history)으로 옮기고 오늘 횟수를 0으로 되돌린다.
+ * 오늘 쇼츠 앱을 본 시간(초), 아침 약속(예산 분·이유·개입 지점 분)을 폰 안에만 저장한다.
+ * 날짜가 바뀌면 어제 시간을 기록(history)으로 옮기고 오늘 시간을 0으로 되돌린다.
  */
 class CounterStore(context: Context) {
 
-    data class Tick(val count: Int, val budget: Int?, val line: String?, val crossedBudget: Boolean)
+    data class Tick(
+        val usedSec: Int,
+        val budgetMin: Int?,
+        val line: String?,
+        val crossedBudget: Boolean,
+        val minuteChanged: Boolean,
+    )
 
     private val p = context.applicationContext.getSharedPreferences("pengom", Context.MODE_PRIVATE)
 
@@ -25,13 +31,12 @@ class CounterStore(context: Context) {
         val e = p.edit()
         if (cur != null) {
             val hist = history()
-            hist.put(cur, p.getInt(K_COUNT, 0))
-            // 최근 60일만 보관
+            hist.put(cur, p.getInt(K_USED, 0))
             val keys = hist.keys().asSequence().sorted().toList()
             keys.dropLast(60).forEach { hist.remove(it) }
             e.putString(K_HIST, hist.toString())
         }
-        e.putString(K_DATE, d).putInt(K_COUNT, 0).putString(K_FIRED, "").putBoolean(K_ACK, false)
+        e.putString(K_DATE, d).putInt(K_USED, 0).putString(K_FIRED, "").putBoolean(K_ACK, false)
             .remove(K_BUDGET).remove(K_TH).remove(K_OVER_TH)
             .apply()
     }
@@ -39,72 +44,82 @@ class CounterStore(context: Context) {
     private fun history(): JSONObject =
         try { JSONObject(p.getString(K_HIST, "{}") ?: "{}") } catch (e: Exception) { JSONObject() }
 
-    fun count(): Int { roll(); return p.getInt(K_COUNT, 0) }
+    fun usedSec(): Int { roll(); return p.getInt(K_USED, 0) }
+    fun usedMin(): Int = usedSec() / 60
     fun budget(): Int? { roll(); return if (p.contains(K_BUDGET)) p.getInt(K_BUDGET, 0) else null }
     fun reason(): String = p.getString(K_REASON, "다른 거") ?: "다른 거"
-    fun isOver(): Boolean { val b = budget() ?: return false; return count() > b }
+    fun isOver(): Boolean { val b = budget() ?: return false; return usedSec() > b * 60 }
 
     private fun ints(key: String): List<Int> = try {
         val a = JSONArray(p.getString(key, "[]")); List(a.length()) { a.getInt(it) }
     } catch (e: Exception) { emptyList() }
 
     @Synchronized
-    fun setPromise(budget: Int, reason: String, th: String, overTh: String) {
+    fun setPromise(budgetMin: Int, reason: String, th: String, overTh: String) {
         roll()
-        p.edit().putInt(K_BUDGET, budget).putString(K_REASON, reason)
+        p.edit().putInt(K_BUDGET, budgetMin).putString(K_REASON, reason)
             .putString(K_TH, th).putString(K_OVER_TH, overTh).apply()
     }
 
     fun ackOver() { p.edit().putBoolean(K_ACK, true).apply() }
 
+    /** 서비스가 다시 시작됐을 때, 시스템 기록으로 계산한 오늘 시간이 더 크면 그 값으로 맞춘다 */
     @Synchronized
-    fun increment(): Tick {
+    fun raiseUsedTo(sec: Int) {
         roll()
-        val prev = p.getInt(K_COUNT, 0)
-        val now = prev + 1
+        if (sec > p.getInt(K_USED, 0)) p.edit().putInt(K_USED, sec).apply()
+    }
+
+    @Synchronized
+    fun addSeconds(sec: Int): Tick {
+        roll()
+        val prev = p.getInt(K_USED, 0)
+        val now = prev + sec
         val b = budget()
+        val pm = prev / 60.0
+        val nm = now / 60.0
         val fired = (p.getString(K_FIRED, "") ?: "").split(',').filter { it.isNotEmpty() }.toMutableSet()
         var line: String? = null
         var crossed = false
         if (b != null) {
             ints(K_TH).forEachIndexed { i, t ->
-                if (prev < t && now >= t && "t$i" !in fired) {
+                if (pm < t && nm >= t && "t$i" !in fired) {
                     fired += "t$i"
                     line = when (i) {
-                        0 -> "지금 몇 번째인지 모르지? ${t}번째야."
-                        1 -> "${t}개째. 아직 약속 안이긴 해."
-                        else -> "${b - t}개 남음. 신중하게 골라."
+                        0 -> "지금 몇 분째인지 모르지? ${t}분째야."
+                        1 -> "${t}분째. 아직 약속 안이긴 해."
+                        else -> "${b - t}분 남음. 신중하게 골라."
                     }
                 }
             }
-            if (prev <= b && now > b && !p.getBoolean(K_ACK, false)) crossed = true
+            if (pm <= b && nm > b && !p.getBoolean(K_ACK, false)) crossed = true
             ints(K_OVER_TH).forEachIndexed { i, t ->
-                if (prev < t && now >= t && "o$i" !in fired) {
+                if (pm < t && nm >= t && "o$i" !in fired) {
                     fired += "o$i"
                     line = overLine(i, t)
                 }
             }
         }
-        p.edit().putInt(K_COUNT, now).putString(K_FIRED, fired.joinToString(",")).apply()
-        return Tick(now, b, line, crossed)
+        p.edit().putInt(K_USED, now).putString(K_FIRED, fired.joinToString(",")).apply()
+        return Tick(now, b, line, crossed, prev / 60 != now / 60)
     }
 
     private fun overLine(i: Int, n: Int): String = when (i % 7) {
         0 -> "나 지금 액체임."
-        1 -> "${n}개 봤는데. 뭐 봤냐?"
+        1 -> "${n}분 봤는데. 뭐 봤냐?"
         2 -> "방금 거 기억나? 그 전 거는?"
         3 -> "엄지는 멀쩡하네. 나는 아님."
         4 -> "계속 녹는 중. 신경 쓰지 마."
         5 -> "아침에 '${reason()}' 한다며."
-        else -> "${n}개째. 알고리즘이 너 키우는 중."
+        else -> "${n}분째. 알고리즘이 너 키우는 중."
     }
 
-    /** 웹 화면으로 넘기는 상태 */
+    /** 웹 화면으로 넘기는 상태 (used, history 는 초 단위) */
     fun stateJson(): String {
         roll()
         return JSONObject()
             .put("date", p.getString(K_DATE, today()))
-            .put("count", p.getInt(K_COUNT, 0))
+            .put("used", p.getInt(K_USED, 0))
             .put("budget", budget() ?: JSONObject.NULL)
             .put("history", history())
             .toString()
@@ -112,12 +127,12 @@ class CounterStore(context: Context) {
 
     companion object {
         private const val K_DATE = "date"
-        private const val K_COUNT = "count"
-        private const val K_HIST = "history"
-        private const val K_BUDGET = "budget"
+        private const val K_USED = "usedSec"
+        private const val K_HIST = "historySec"
+        private const val K_BUDGET = "budgetMin"
         private const val K_REASON = "reason"
-        private const val K_TH = "th"
-        private const val K_OVER_TH = "overTh"
+        private const val K_TH = "thMin"
+        private const val K_OVER_TH = "overThMin"
         private const val K_FIRED = "fired"
         private const val K_ACK = "overAck"
     }

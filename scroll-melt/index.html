@@ -274,13 +274,13 @@ details.dev button { font-size: 13px; padding: 10px; border-radius: 12px; backgr
           <div class="mascot" id="p-char"></div>
         </div>
         <div class="card">
-          <label class="label" for="p-num">오늘 쇼츠, 몇 개까지 볼래?</label>
+          <label class="label" for="p-num">오늘 쇼츠, 몇 분까지 볼래?</label>
           <div class="budget-row">
-            <input id="p-num" type="text" inputmode="numeric" pattern="[0-9]*" maxlength="3" placeholder="47" autocomplete="off">
-            <span class="unit">개</span>
+            <input id="p-num" type="text" inputmode="numeric" pattern="[0-9]*" maxlength="3" placeholder="31" autocomplete="off">
+            <span class="unit">분</span>
           </div>
           <span class="budget-min" id="p-min"></span>
-          <div class="hint" id="p-hint">딱 떨어지는 숫자(50, 100…)는 1 비틀어서 받을게.</div>
+          <div class="hint" id="p-hint">딱 떨어지는 숫자(30, 60…)는 1 비틀어서 받을게.</div>
         </div>
         <div class="card">
           <label class="label" for="p-reason">오늘 아끼는 이유</label>
@@ -304,23 +304,23 @@ details.dev button { font-size: 13px; padding: 10px; border-radius: 12px; backgr
           <div class="bubble" id="h-bubble">오늘은 몇 개로 버틸까.</div>
           <div class="mascot" id="h-char"></div>        </div>
         <div class="card perm" id="h-perm" hidden>
-          <span class="label">스크롤 세기가 꺼져 있어</span>
-          <p class="perm-text">인스타·유튜브·틱톡에서 넘긴 횟수를 세려면 접근성 권한이 필요해. 화면 속 글자나 영상은 읽지 않고, 넘긴 횟수만 이 폰에 저장해.</p>
+          <span class="label">시간 재기가 꺼져 있어</span>
+          <p class="perm-text">인스타·유튜브·틱톡을 본 시간을 재려면 "사용 정보 접근"과 "다른 앱 위에 표시" 권한이 필요해. 화면 속 글자나 영상은 보지 않고, 어떤 앱이 몇 분 켜져 있었는지만 이 폰에 저장해.</p>
           <button class="btn ghost" id="h-perm-btn">권한 켜러 가기</button>
         </div>
         <div class="card today">
           <div class="ring" id="h-ring">
             <svg viewBox="0 0 120 120"><circle class="track" cx="60" cy="60" r="50" fill="none" stroke-width="12"/><circle class="val" cx="60" cy="60" r="50" fill="none" stroke-width="12" stroke-linecap="round" stroke-dasharray="314.16" stroke-dashoffset="314.16"/></svg>
-            <div class="mid"><span class="num" id="h-count">0</span><span class="of" id="h-of">/ 93</span></div>
+            <div class="mid"><span class="num" id="h-count">0</span><span class="of" id="h-of">/ 31분</span></div>
           </div>
           <div class="today-side">
-            <span class="label">오늘 넘긴 쇼츠</span>
-            <span class="state" id="h-state">93개 남음</span>          </div>
+            <span class="label">오늘 쇼츠 본 시간</span>
+            <span class="state" id="h-state">31분 남음</span>          </div>
         </div>
         <div class="tiles">
-          <div class="tile"><span class="label">어제 넘긴 쇼츠</span><span class="v" id="h-base">-</span></div>
-          <div class="tile"><span class="label">오늘 쓴 시간</span><span class="v" id="h-saved">0분</span></div>
-          <div class="tile"><span class="label">연속 기록</span><span class="v" id="h-streak2">0일</span></div>
+          <div class="tile"><span class="label">어제 본 시간</span><span class="v" id="h-base">-</span></div>
+          <div class="tile"><span class="label">연속 기록</span><span class="v" id="h-saved">0분</span></div>
+          <div class="tile"><span class="label">이번 주 지킨 날</span><span class="v" id="h-streak2">0일</span></div>
         </div>
         <details class="dev">
           <summary>테스트 도구</summary>
@@ -340,10 +340,10 @@ details.dev button { font-size: 13px; padding: 10px; border-radius: 12px; backgr
       <div class="feedbar">
         <button class="iconbtn" id="f-exit" aria-label="나가기"><svg class="i"><use href="#i-close"/></svg></button>
         <div class="meter" id="f-meter">
-          <div class="top"><span class="n" id="f-n">0</span><span class="r" id="f-r">93 남음</span></div>
+          <div class="top"><span class="n" id="f-n">0:00</span><span class="r" id="f-r">31분 남음</span></div>
           <div class="bar"><i id="f-bar"></i></div>
         </div>
-        <button class="iconbtn test" id="f-ff" title="테스트: 10개 넘기기">+10</button>
+        <button class="iconbtn test" id="f-ff" title="테스트: 3분 지나가기">+3분</button>
       </div>
       <div class="toast" id="toast" role="status" aria-live="polite"><span class="face" id="t-face"></span><span id="t-text"></span></div>
       <div class="sheet-wrap" id="sheet" hidden>
@@ -508,9 +508,8 @@ details.dev button { font-size: 13px; padding: 10px; border-radius: 12px; backgr
   /* =========================================================
      앱 상태
      ========================================================= */
-  const SEED = [158, 149, 150]; // 첫 3일 관찰 (예시 데이터)
-  const SEC = 22; // 쇼츠 1개 평균 초
-  const REASONS = ["운동", "공부", "잠", "독서", "가족이랑 시간"];
+  // 시간 기준: 예산은 "분", 오늘 쓴 시간은 "초"(S.used)로 저장한다.
+  const SEED = [41, 37, 38]; // 기준선 초기값(분). 성장 계산에만 쓰고 화면에는 안 보인다.
   const SHORTS = [
     ["🐈", "고양이가 상자에 들어감", "@meow_daily", "#3a2f5c", "#9b6bd6"],
     ["🌶️", "마라탕 5단계 먹방", "@spicy.kim", "#5c1d12", "#e2582f"],
@@ -530,24 +529,28 @@ details.dev button { font-size: 13px; padding: 10px; border-radius: 12px; backgr
     ["🛹", "보드 타다 넘어짐", "@sk8.oops", "#1f2a33", "#7aa0b8"],
   ];
   const $ = (id) => document.getElementById(id);
-  // 안드로이드 앱 안에서 열리면 실제 카운터(접근성 서비스)와 연결된다
+  // 안드로이드 앱 안에서 열리면 실제 사용 시간(네이티브)과 연결된다
   const NATIVE = window.PengomNative || null;
-  const avg =(a) => Math.round(a.reduce((s, v) => s + v, 0) / a.length);
+  const avg = (a) => Math.round(a.reduce((s, v) => s + v, 0) / a.length);
   const fresh = () => ({
-    day: 1, baseline: avg(SEED), counts: [], size: 10.0, streak: 0, shields: 1,
-    budget: null, reason: "", count: 0, fired: [], overAck: false, exitedOnce: false,
-    morningMsg: "처음 보네. 나 펭곰이. 오늘 몇 개만 볼래? 네가 정해.", homeMsg: "", savedWeek: [],
+    day: 1, baseline: avg(SEED), mins: [], kept: [], size: 10.0, streak: 0, shields: 1,
+    budget: null, reason: "", used: 0, fired: [], overAck: false, exitedOnce: false,
+    morningMsg: "처음 보네. 나 펭곰이. 오늘 쇼츠 몇 분만 볼래? 네가 정해.", homeMsg: "",
     lastMelt: 0, lastJoy: false,
   });
   let S;
-  try { S = JSON.parse(localStorage.getItem("pengom-v2")) || fresh(); } catch (e) { S = fresh(); }
-  const save = () => { try { localStorage.setItem("pengom-v2", JSON.stringify(S)); } catch (e) {} };
-  const fmtMin = (sec) => { const mm = Math.round(sec / 60); return mm >= 60 ? Math.floor(mm / 60) + "시간 " + (mm % 60) + "분" : mm + "분"; };
+  try { S = JSON.parse(localStorage.getItem("pengom-v3")) || fresh(); } catch (e) { S = fresh(); }
+  const save = () => { try { localStorage.setItem("pengom-v3", JSON.stringify(S)); } catch (e) {} };
+  const minOf = (sec) => Math.floor(sec / 60);
+  const fmtMin = (m) => m >= 60 ? Math.floor(m / 60) + "시간 " + (m % 60) + "분" : m + "분";
+  const fmtClock = (sec) => minOf(sec) + ":" + String(Math.floor(sec % 60)).padStart(2, "0");
+  const usedMin = () => minOf(S.used);
+  const isOver = () => S.budget && S.used > S.budget * 60;
   const buzz = (p) => { try { navigator.vibrate && navigator.vibrate(p); } catch (e) {} };
 
   const rig = { p: new Mascot($("p-char")), h: new Mascot($("h-char")), s: new Mascot($("s-char")), t: new Mascot($("t-face")) };
   const growPx = (base) => Math.round(base * Math.min(1.35, 0.9 + (S.size - 10) / 30));
-  const meltNow = () => S.budget && S.count > S.budget ? Math.min(1, 0.3 + (S.count - S.budget) / (S.budget * 0.9)) : 0;
+  const meltNow = () => isOver() ? Math.min(1, 0.3 + (S.used / 60 - S.budget) / (S.budget * 0.9)) : 0;
 
   function say(el, r, text) {
     el.textContent = text; el.classList.remove("pop"); void el.offsetWidth; el.classList.add("pop");
@@ -572,9 +575,8 @@ details.dev button { font-size: 13px; padding: 10px; border-radius: 12px; backgr
     if (id === "home") renderHome();
   }
 
-  /* ---------- 아침 약속 ---------- */
-  const noRound = (v, max) => { v = Math.round(v); while (v % 5 === 0) v = v + 1 > max ? v - 1 : v + 1; return v; };
-  // 예산과 이유는 사용자가 직접 적는다. 딱 떨어지는 숫자만 1 비틀어 받는다.
+  /* ---------- 아침 약속 (분) ---------- */
+  const noRound = (v) => { v = Math.round(v); while (v % 5 === 0) v += 1; return v; };
   function renderPromise() {
     $("p-title").innerHTML = `<small>${S.day}일차 아침</small>오늘의 약속`;
     rig.p.el.style.width = growPx(200) + "px";
@@ -587,10 +589,10 @@ details.dev button { font-size: 13px; padding: 10px; border-radius: 12px; backgr
   const readBudget = () => { const v = parseInt($("p-num").value, 10); return v > 0 ? v : null; };
   function budgetHint() {
     const v = readBudget(), h = $("p-hint");
-    $("p-min").textContent = v ? "약 " + Math.max(1, Math.round(v * SEC / 60)) + "분" : "";
-    if (v && v % 5 === 0) { h.className = "hint warn"; h.textContent = "딱 떨어지면 더 보고 싶어지거든. " + (v + 1) + "개로 받을게."; return; }
+    $("p-min").textContent = "인스타·유튜브·틱톡 합쳐서";
+    if (v && v % 5 === 0) { h.className = "hint warn"; h.textContent = "딱 떨어지면 더 보고 싶어지거든. " + (v + 1) + "분으로 받을게."; return; }
     h.className = "hint";
-    h.textContent = S.counts.length ? "어제는 " + S.counts[S.counts.length - 1] + "개 봤어." : "딱 떨어지는 숫자(50, 100…)는 1 비틀어서 받을게.";
+    h.textContent = S.mins.length ? "어제는 " + fmtMin(S.mins[S.mins.length - 1]) + " 봤어." : "딱 떨어지는 숫자(30, 60…)는 1 비틀어서 받을게.";
   }
   $("p-num").addEventListener("input", () => {
     $("p-num").value = $("p-num").value.replace(/\D/g, "").slice(0, 3);
@@ -599,15 +601,15 @@ details.dev button { font-size: 13px; padding: 10px; border-radius: 12px; backgr
   $("p-go").onclick = () => {
     let v = readBudget();
     if (!v) {
-      const h = $("p-hint"); h.className = "hint warn"; h.textContent = "몇 개까지 볼지 숫자로 적어줘.";
+      const h = $("p-hint"); h.className = "hint warn"; h.textContent = "몇 분까지 볼지 숫자로 적어줘.";
       $("p-num").focus(); buzz(15); return;
     }
     if (v % 5 === 0) v += 1;
     S.budget = v; S.reason = $("p-reason").value.trim() || "다른 거";
-    const b = S.budget, j = (n) => noRound(n, 9999);
-    S.th = [j(b * 0.41), j(b * 0.72), Math.max(1, b - (3 + (S.day % 4)))];
-    S.overTh = [23, 61, 97, 143, 211, 277, 349].map((x) => b + x);
-    S.homeMsg = "약속했다. " + b + "개. 내가 센다.";
+    const b = S.budget;
+    S.th = [noRound(b * 0.41), noRound(b * 0.72), Math.max(1, b - 2)].filter((t) => t < b);
+    S.overTh = [3, 7, 12, 18, 26, 35, 47].map((x) => b + x);
+    S.homeMsg = "약속했다. " + b + "분. 내가 잰다.";
     S.lastMelt = 0; S.lastJoy = false;
     pushPromise();
     save(); go("home");
@@ -617,29 +619,29 @@ details.dev button { font-size: 13px; padding: 10px; border-radius: 12px; backgr
   function renderHome() {
     $("h-title").innerHTML = `<small>${S.day}일차</small>오늘`;
     $("h-streak").textContent = S.streak; $("h-shield").textContent = S.shields;
-    $("h-streak2").textContent = S.streak + "일";
+    $("h-streak2").textContent = S.kept.slice(-7).filter(Boolean).length + "일";
     rig.h.el.style.width = growPx(220) + "px";
-    say($("h-bubble"), rig.h, S.homeMsg || "오늘은 몇 개로 버틸까.");
+    say($("h-bubble"), rig.h, S.homeMsg || "오늘은 몇 분으로 버틸까.");
     homeNums();
     if (NATIVE) nativeUi();
   }
   function homeNums() {
-    const over = S.count > S.budget, m = meltNow();
+    const over = isOver(), m = meltNow(), um = usedMin();
     rig.h.set(over ? "melt" : "idle", m);
-    $("h-count").textContent = S.count; $("h-of").textContent = "/ " + S.budget;
-    const ring = $("h-ring"), frac = Math.min(1, S.count / S.budget);
+    $("h-count").textContent = um; $("h-of").textContent = "/ " + S.budget + "분";
+    const ring = $("h-ring"), frac = Math.min(1, S.used / (S.budget * 60));
     ring.classList.toggle("over", over);
     ring.querySelector(".val").style.strokeDashoffset = (314.16 * (1 - frac)).toFixed(2);
     const st = $("h-state");
     st.className = "state" + (over ? " over" : "");
-    st.textContent = over ? (S.count - S.budget) + "개 초과" : (S.budget - S.count) + "개 남음";
-    $("h-base").textContent = S.counts.length ? S.counts[S.counts.length - 1] + "개" : "-";
-    $("h-saved").textContent = fmtMin(S.count * SEC);
+    st.textContent = over ? (um - S.budget) + "분 초과" : Math.max(0, S.budget - um) + "분 남음";
+    $("h-base").textContent = S.mins.length ? fmtMin(S.mins[S.mins.length - 1]) : "-";
+    $("h-saved").textContent = S.streak + "일";
   }
 
-  /* ---------- 쇼츠 피드 ---------- */
+  /* ---------- 연습 피드: 보는 동안 실제로 시간이 흐른다 ---------- */
   const reel = $("reel");
-  let seen = 0, made = 0, toastT, locked = false;
+  let made = 0, toastT, locked = false, clock = null;
   const icon = (n) => `<svg><use href="#i-${n}"/></svg>`;
   function addShorts(n) {
     let html = "";
@@ -655,20 +657,28 @@ details.dev button { font-size: 13px; padding: 10px; border-radius: 12px; backgr
   }
   let practice = null;
   function openFeed() {
-    if (NATIVE) practice = { count: S.count, fired: S.fired.slice(), overAck: S.overAck };
-    reel.innerHTML = ""; made = 0; seen = 0; addShorts(8);
+    if (NATIVE) practice = { used: S.used, fired: S.fired.slice(), overAck: S.overAck };
+    reel.innerHTML = ""; made = 0; addShorts(8);
     go("feed"); reel.scrollTop = 0; reel.focus({ preventScroll: true });
     updateMeter();
+    clearInterval(clock); clock = setInterval(() => addTime(1), 1000);
     if (S.exitedOnce) setTimeout(() => toast("어? 아까 나가지 않았냐?"), 350);
     save();
   }
-  function updateMeter() {
-    const over = S.count > S.budget;
-    $("f-n").textContent = S.count;
+  function addTime(sec) {
+    if (locked || $("feed").hidden) return;
+    const prev = S.used; S.used += sec;
+    updateMeter(minOf(prev) !== minOf(S.used));
+    onAdvance(prev / 60, S.used / 60);
+    if (sec > 1 || S.used % 5 === 0) save();
+  }
+  function updateMeter(bump) {
+    const over = isOver(), left = S.budget * 60 - S.used;
+    $("f-n").textContent = fmtClock(S.used);
     $("f-meter").classList.toggle("over", over);
-    $("f-r").textContent = over ? "+" + (S.count - S.budget) + " 초과" : (S.budget - S.count) + " 남음";
-    $("f-bar").style.width = Math.min(100, S.count / S.budget * 100) + "%";
-    const mt = $("f-meter"); mt.classList.remove("bump"); void mt.offsetWidth; mt.classList.add("bump");
+    $("f-r").textContent = over ? "+" + (usedMin() - S.budget) + "분 초과" : Math.ceil(left / 60) + "분 남음";
+    $("f-bar").style.width = Math.min(100, S.used / (S.budget * 60) * 100) + "%";
+    if (bump) { const mt = $("f-meter"); mt.classList.remove("bump"); void mt.offsetWidth; mt.classList.add("bump"); }
   }
   function toast(text) {
     const m = meltNow();
@@ -680,49 +690,36 @@ details.dev button { font-size: 13px; padding: 10px; border-radius: 12px; backgr
   }
   const OVER_LINES = [
     () => "나 지금 액체임.",
-    (n) => n + "개 봤는데. 뭐 봤냐?",
+    (n) => n + "분 봤는데. 뭐 봤냐?",
     () => "방금 거 기억나? 그 전 거는?",
     () => "엄지는 멀쩡하네. 나는 아님.",
     () => "계속 녹는 중. 신경 쓰지 마.",
     () => "아침에 '" + S.reason + "' 한다며.",
-    (n) => n + "개째. 알고리즘이 너 키우는 중.",
+    (n) => n + "분째. 알고리즘이 너 키우는 중.",
   ];
+  // prev, now: 분 단위(소수)
   function onAdvance(prev, now) {
     let line = null;
-    S.th.forEach((t, i) => {
+    (S.th || []).forEach((t, i) => {
       if (prev < t && now >= t && !S.fired.includes("t" + i)) {
         S.fired.push("t" + i);
-        line = ["지금 몇 번째인지 모르지? " + t + "번째야.", t + "개째. 아직 약속 안이긴 해.", (S.budget - t) + "개 남음. 신중하게 골라."][i];
+        line = ["지금 몇 분째인지 모르지? " + t + "분째야.", t + "분째. 아직 약속 안이긴 해.", (S.budget - t) + "분 남음. 신중하게 골라."][i];
       }
     });
     if (prev <= S.budget && now > S.budget && !S.overAck) { showSheet(); return; }
-    S.overTh.forEach((t, i) => {
+    (S.overTh || []).forEach((t, i) => {
       if (prev < t && now >= t && !S.fired.includes("o" + i)) { S.fired.push("o" + i); line = OVER_LINES[i % OVER_LINES.length](t); }
     });
     if (line) toast(line);
   }
-  function sync() {
-    if (locked) return;
-    const idx = Math.round(reel.scrollTop / reel.clientHeight);
-    if (idx > seen) {
-      const prev = S.count;
-      S.count += idx - seen; seen = idx;
-      updateMeter(); onAdvance(prev, S.count); save();
-    }
-    if (idx > made - 4) addShorts(8);
-  }
-  reel.addEventListener("scroll", sync);
-  $("f-ff").onclick = () => {
-    if (locked) return;
-    if (made < seen + 14) addShorts(14);
-    reel.scrollTop = (seen + 10) * reel.clientHeight; sync();
-  };
+  reel.addEventListener("scroll", () => { if (reel.scrollTop > (made - 4) * reel.clientHeight) addShorts(8); });
+  $("f-ff").onclick = () => addTime(180);
   function showSheet() {
     locked = true; reel.style.overflowY = "hidden";
     rig.s.set("melt", 0.35);
     const own = S.reason && S.reason !== "다른 거";
     $("s-quote").textContent = (own ? "“" + S.reason + " 하려고 아낀다.” 아침에 네가 쓴 말이야.\n" : "")
-      + "약속 " + S.budget + "개, 지금 " + S.count + "개째.";
+      + "약속 " + S.budget + "분, 지금 " + usedMin() + "분째.";
     $("sheet").hidden = false; rig.s.talk(1800); buzz([30, 60, 30]); $("s-leave").focus();
   }
   function hideSheet() { $("sheet").hidden = true; locked = false; reel.style.overflowY = "scroll"; }
@@ -730,26 +727,27 @@ details.dev button { font-size: 13px; padding: 10px; border-radius: 12px; backgr
   $("s-leave").onclick = () => { hideSheet(); exitFeed(); };
   $("f-exit").onclick = exitFeed;
   function exitFeed() {
+    clearInterval(clock); clock = null;
     if (practice) {
       Object.assign(S, practice); practice = null;
       S.homeMsg = "연습 끝. 진짜 기록은 그대로야.";
       save(); go("home"); return;
     }
     S.exitedOnce = true;
-    if (S.count > S.budget) S.homeMsg = "약속보다 " + (S.count - S.budget) + "개 더 봤네. 나 지금 액체임.";
-    else S.homeMsg = S.count === 0 ? "들어갔다 바로 나왔네. 뭐야." : "오, 탈출했네.";
+    if (isOver()) S.homeMsg = "약속보다 " + (usedMin() - S.budget) + "분 더 봤네. 나 지금 액체임.";
+    else S.homeMsg = S.used < 60 ? "들어갔다 바로 나왔네. 뭐야." : "오, 탈출했네.";
     save(); go("home");
-    if (S.count <= S.budget && S.count > 0) rig.h.hop(700);
+    if (!isOver() && S.used >= 60) rig.h.hop(700);
   }
 
   /* ---------- 하루 넘기기 ---------- */
   function nextDay() {
-    const kept = S.count <= S.budget;
+    const kept = !isOver(), um = usedMin();
     let msg; S.lastMelt = 0; S.lastJoy = kept;
     if (kept) {
-      const g = 0.3 + Math.max(0, (S.baseline - S.count) / S.baseline) * 3;
+      const g = 0.3 + Math.max(0, (S.baseline - um) / S.baseline) * 3;
       S.size += g; S.streak += 1; if (S.streak % 7 === 0) S.shields += 1;
-      msg = "오. 나 좀 컸다. (+" + g.toFixed(1) + "cm) 오늘은?";
+      msg = "오. 나 좀 컸다. 어제는 " + fmtMin(um) + ". 오늘은?";
     } else if (S.shields > 0 && S.streak > 0) {
       S.shields -= 1; S.size = Math.max(6, S.size - 0.4); S.lastMelt = 0.25;
       msg = "방패로 막았어. 연속 기록은 살았음. 몸은 아님.";
@@ -757,11 +755,10 @@ details.dev button { font-size: 13px; padding: 10px; border-radius: 12px; backgr
       S.streak = 0; S.size = Math.max(6, S.size - 0.6); S.lastMelt = 0.35;
       msg = "어제 좀 녹았지. 어제는 어제고. 오늘은?";
     }
-    S.savedWeek.push(Math.max(0, S.baseline - S.count) * SEC);
-    S.counts.push(S.count);
-    S.baseline = avg(SEED.concat(S.counts).slice(-7));
+    S.mins.push(um); S.kept.push(kept);
+    S.baseline = Math.max(5, avg(SEED.concat(S.mins).slice(-7)));
     S.lastBudget = S.budget;
-    Object.assign(S, { day: S.day + 1, count: 0, fired: [], overAck: false, exitedOnce: false, morningMsg: msg, homeMsg: "" });
+    Object.assign(S, { day: S.day + 1, used: 0, fired: [], overAck: false, exitedOnce: false, morningMsg: msg, homeMsg: "" });
     save(); go("promise");
   }
 
@@ -777,7 +774,7 @@ details.dev button { font-size: 13px; padding: 10px; border-radius: 12px; backgr
   function nativeUi() {
     const on = !!NATIVE.isCounting();
     $("h-perm").hidden = on;
-    $("h-watch").textContent = on ? "쇼츠 보러 가기" : "스크롤 세기 켜기";
+    $("h-watch").textContent = on ? "쇼츠 보러 가기" : "시간 재기 켜기";
   }
   function nativeSync() {
     if (!NATIVE || !$("feed").hidden) return;
@@ -785,17 +782,17 @@ details.dev button { font-size: 13px; padding: 10px; border-radius: 12px; backgr
     if (S.budget && S.dateKey && st.date !== S.dateKey) {
       // 자정을 넘겼다: 어제 기록으로 하루 정산
       const y = st.history && st.history[S.dateKey];
-      if (typeof y === "number") S.count = y;
+      if (typeof y === "number") S.used = y;
       S.dateKey = st.date; nextDay(); return;
     }
     if (S.budget && st.budget == null) pushPromise();
-    if (st.count !== S.count) {
-      const wasOver = S.count > S.budget;
-      S.count = st.count; save();
+    if (st.used !== S.used) {
+      const wasOver = isOver();
+      S.used = st.used; save();
       if (!$("home").hidden) {
         homeNums();
-        if ((S.count > S.budget) !== wasOver) {
-          S.homeMsg = S.count > S.budget ? "약속보다 " + (S.count - S.budget) + "개 더 봤네. 나 지금 액체임." : S.homeMsg;
+        if (isOver() !== wasOver && isOver()) {
+          S.homeMsg = "약속보다 " + (usedMin() - S.budget) + "분 더 봤네. 나 지금 액체임.";
           say($("h-bubble"), rig.h, S.homeMsg);
         }
       }

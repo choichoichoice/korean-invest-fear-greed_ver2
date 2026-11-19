@@ -1,6 +1,5 @@
 package app.pengom
 
-import android.accessibilityservice.AccessibilityService
 import android.content.Context
 import android.graphics.Color
 import android.graphics.PixelFormat
@@ -23,13 +22,13 @@ import android.widget.LinearLayout
 import android.widget.TextView
 
 /**
- * 다른 앱 위에 뜨는 화면들. 접근성 서비스 전용 오버레이라서 "다른 앱 위에 표시" 권한이 따로 필요 없다.
- *  - 카운터: 화면 위쪽 가운데 "↕ 37 · 56 남음"
- *  - 한마디: 캐릭터 얼굴 + 말풍선 (넘기는 순간에만, 2.8초)
+ * 다른 앱 위에 뜨는 화면들 ("다른 앱 위에 표시" 권한 필요).
+ *  - 카운터: 화면 위쪽 가운데 "17분 · 14분 남음"
+ *  - 한마디: 캐릭터 얼굴 + 말풍선 (정해둔 분에 도달할 때, 2.8초)
  *  - 약속 초과: 아래에서 올라오는 시트 "네가 정한 거야. 내가 정한 거 아니고."
  */
 class OverlayController(
-    private val svc: AccessibilityService,
+    private val svc: Context,
     private val store: CounterStore,
     private val goHome: () -> Unit,
 ) {
@@ -48,7 +47,7 @@ class OverlayController(
 
     private fun params(w: Int, h: Int, touchable: Boolean) = WindowManager.LayoutParams(
         w, h,
-        WindowManager.LayoutParams.TYPE_ACCESSIBILITY_OVERLAY,
+        WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,
         WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
             WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN or
             (if (touchable) 0 else WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE),
@@ -97,15 +96,16 @@ class OverlayController(
     }
 
     private fun refresh() {
-        val c = store.count(); val b = store.budget()
-        val over = b != null && c > b
-        pillNum?.text = "↕ $c"
-        pillSub?.text = when { b == null -> "약속 전"; over -> "+${c - b} 초과"; else -> "${b - c} 남음" }
+        val m = store.usedMin(); val b = store.budget()
+        val over = store.isOver()
+        pillNum?.text = "${m}분"
+        pillSub?.text = when { b == null -> "약속 전"; over -> "+${m - b}분 초과"; else -> "${b - m}분 남음" }
         pillSub?.setTextColor(if (over) 0xFFFF9D80.toInt() else 0xCCFFFFFF.toInt())
         pillIcon?.setImageResource(if (over) R.drawable.mascot_head_melt else R.drawable.mascot_head)
     }
 
-    fun onCount(t: CounterStore.Tick) {
+    fun onTick(t: CounterStore.Tick) {
+        if (!t.minuteChanged && t.line == null && !t.crossedBudget) return
         show()
         refresh()
         pill?.animate()?.scaleX(1.08f)?.scaleY(1.08f)?.setDuration(90)
@@ -172,7 +172,7 @@ class OverlayController(
         card.addView(TextView(svc).apply {
             val reason = store.reason()
             text = (if (reason != "다른 거") "“$reason 하려고 아낀다.” 아침에 네가 쓴 말이야.\n" else "") +
-                "약속 ${store.budget()}개, 지금 ${store.count()}개째."
+                "약속 ${store.budget()}분, 지금 ${store.usedMin()}분째."
             textSize = 14f; setTextColor(0xFF687B8B.toInt()); gravity = Gravity.CENTER
             setPadding(px(12), px(10), px(12), px(10))
             background = rounded(Color.WHITE, 14, 2, 0xFFE1EAF0.toInt())
